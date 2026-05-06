@@ -1,0 +1,54 @@
+# docker-compose.yml
+# Run from the repo root:   docker compose -f infra/docker-compose.yml up
+#
+# Two services:
+#   cpu-limited  – fraction-of-a-core CPU cap, plentiful I/O   → should show I/O slack
+#   io-limited   – plentiful CPU, constrained I/O bandwidth     → should show CPU slack
+#
+# Note: block-device I/O limits (blkio) require running on Linux with root
+# and specifying the real device path.  Adjust `device_write_bps` for your
+# EC2 instance's root device (commonly /dev/xvda or /dev/nvme0n1).
+# On Mac Docker Desktop, I/O limits are not enforced; use EC2 for real experiments.
+
+version: "3.8"
+
+x-common: &common
+  build:
+    context: ..
+    dockerfile: infra/Dockerfile
+  environment:
+    PYTHONUNBUFFERED: "1"
+
+services:
+
+  # ── CPU-bottlenecked container ──────────────────────────────────────────────
+  cpu-limited:
+    <<: *common
+    cpus: "0.25"        # Severely CPU-limited: quarter-core
+    mem_limit: "512m"
+    volumes:
+      - ../results/cpu-limited:/app/results
+    command: >
+      --mode full
+      --duration 30
+      --output results/experiment.json
+
+  # ── I/O-bottlenecked container ─────────────────────────────────────────────
+  io-limited:
+    <<: *common
+    cpus: "4.0"         # Plentiful CPU
+    mem_limit: "512m"
+    # Uncomment and adjust device path on Linux EC2 to enforce I/O limits:
+    # blkio_config:
+    #   device_write_bps:
+    #     - path: /dev/xvda      # adjust to your root device
+    #       rate: "2mb"
+    #   device_read_bps:
+    #     - path: /dev/xvda
+    #       rate: "2mb"
+    volumes:
+      - ../results/io-limited:/app/results
+    command: >
+      --mode full
+      --duration 30
+      --output results/experiment.json
