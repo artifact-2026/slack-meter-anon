@@ -105,32 +105,22 @@ just open it in a browser.
 
 ---
 
-### Docker (CPU-limited and I/O-limited containers)
+### Docker
 
-Build the image and run the CPU-limited experiment:
-
-```bash
-docker compose -f infra/docker-compose.yml up cpu-limited
-```
-
-Results land in `results/cpu-limited/experiment.json`.
-
-For the I/O-limited container, edit `infra/docker-compose.yml` and uncomment
-the `blkio_config` block, setting the device path to match your node's root
-device (check with `lsblk`):
-
-```yaml
-blkio_config:
-  device_write_bps:
-    - path: /dev/sda      # adjust as needed
-      rate: "2mb"
-```
-
-Then:
+The container runs with 4 cores and 400 MB/s read+write I/O. The root block
+device is auto-detected — just run:
 
 ```bash
-docker compose -f infra/docker-compose.yml up io-limited
+bash infra/run.sh
 ```
+
+If auto-detection picks the wrong device, override it:
+
+```bash
+BLOCK_DEVICE=/dev/nvme0n1 bash infra/run.sh
+```
+
+Results land in `results/experiment.json`.
 
 ---
 

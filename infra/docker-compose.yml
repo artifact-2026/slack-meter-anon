@@ -1,53 +1,35 @@
 # docker-compose.yml
 # Run from the repo root:   docker compose -f infra/docker-compose.yml up
 #
-# Two services:
-#   cpu-limited  – fraction-of-a-core CPU cap, plentiful I/O   → should show I/O slack
-#   io-limited   – plentiful CPU, constrained I/O bandwidth     → should show CPU slack
+# Single service with both CPU and I/O caps:
+#   4 cores, 400 MB/s read+write
 #
-# Note: block-device I/O limits (blkio) require running on Linux with root
-# and specifying the real device path.  Adjust `device_write_bps` for your
-# EC2 instance's root device (commonly /dev/xvda or /dev/nvme0n1).
-# On Mac Docker Desktop, I/O limits are not enforced; use EC2 for real experiments.
+# Note: blkio limits require Linux with root and a real block device path.
+# Find yours on your Cloudlab node with: lsblk
+# Common values: /dev/sda, /dev/sdb, /dev/nvme0n1
+# These limits are NOT enforced on Mac Docker Desktop; run on Cloudlab for real experiments.
 
 version: "3.8"
 
-x-common: &common
-  build:
-    context: ..
-    dockerfile: infra/Dockerfile
-  environment:
-    PYTHONUNBUFFERED: "1"
-
 services:
 
-  # ── CPU-bottlenecked container ──────────────────────────────────────────────
-  cpu-limited:
-    <<: *common
-    cpus: "0.25"        # Severely CPU-limited: quarter-core
-    mem_limit: "512m"
+  experiment:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    cpus: "4.0"
+    mem_limit: "4g"
+    blkio_config:
+      device_write_bps:
+        - path: ${BLOCK_DEVICE:-/dev/sda}
+          rate: "400mb"
+      device_read_bps:
+        - path: ${BLOCK_DEVICE:-/dev/sda}
+          rate: "400mb"
+    environment:
+      PYTHONUNBUFFERED: "1"
     volumes:
-      - ../results/cpu-limited:/app/results
-    command: >
-      --mode full
-      --duration 30
-      --output results/experiment.json
-
-  # ── I/O-bottlenecked container ─────────────────────────────────────────────
-  io-limited:
-    <<: *common
-    cpus: "4.0"         # Plentiful CPU
-    mem_limit: "512m"
-    # Uncomment and adjust device path on Linux EC2 to enforce I/O limits:
-    # blkio_config:
-    #   device_write_bps:
-    #     - path: /dev/xvda      # adjust to your root device
-    #       rate: "2mb"
-    #   device_read_bps:
-    #     - path: /dev/xvda
-    #       rate: "2mb"
-    volumes:
-      - ../results/io-limited:/app/results
+      - ../results:/app/results
     command: >
       --mode full
       --duration 30
