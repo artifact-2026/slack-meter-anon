@@ -32,5 +32,7 @@ struct WorkloadResult {
 WorkloadResult run_workload(const WorkloadParams& params);
 
 // Individual operations (exposed for unit testing / benchmarking)
+// do_cpu_work performs one fixed-size unit of arithmetic work.
+// Called in a loop inside a tick window to accumulate ops continuously.
 void do_cpu_work();
 void do_io_work(const std::string& tmp_dir);

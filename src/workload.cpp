@@ -9,18 +9,20 @@
 #include <thread>
 #include <unistd.h>
 
-// How often the workload chooses a new operation (milliseconds).
+// How often the workload re-rolls its operation choice (milliseconds).
 static constexpr int TICK_MS = 250;
 
 // Size of each I/O operation write (4 KiB).
 static constexpr size_t IO_BUF_SIZE = 4096;
 
-// Number of arithmetic iterations per CPU tick (tunable).
-static constexpr int CPU_ITERS = 500'000;
+// Iterations per CPU work unit.  Large enough to do real work per call,
+// small enough that the tick loop can count many completions per 250ms.
+static constexpr int CPU_ITERS = 50'000;
 
 // ----------------------------------------------------------------------------
-// do_cpu_work – tight arithmetic loop that prevents compiler optimisation via
-// the volatile accumulator trick.
+// do_cpu_work – one unit of CPU work: a tight arithmetic loop.
+// Called repeatedly inside a tick until the tick window expires.
+// Returns the number of completed iterations (always CPU_ITERS).
 // ----------------------------------------------------------------------------
 void do_cpu_work() {
     volatile uint64_t acc = 1;
@@ -54,12 +56,17 @@ void do_io_work(const std::string& tmp_dir) {
 // ----------------------------------------------------------------------------
 // run_workload – main loop.
 //
-// Every TICK_MS ms the loop selects an operation:
+// Every TICK_MS ms the loop re-rolls its operation choice:
 //   1. Draw m ~ Uniform(0,1).
-//      If m > intensity  →  sleep TICK_MS ms   (yield the CPU).
+//      If m > intensity  →  sleep for TICK_MS ms (yield the CPU).
 //   2. Else draw n ~ Uniform(0,1).
-//      If n > io_mix     →  CPU work
-//      Else              →  I/O work
+//      If n > io_mix     →  CPU phase: keep calling do_cpu_work() until the
+//                           tick window expires, counting each call as one op.
+//      Else              →  I/O phase: keep calling do_io_work() until the
+//                           tick window expires, counting each call as one op.
+//
+// Counting completions within each tick (rather than one op per tick) gives
+// throughput that reflects real work done and saturates naturally under load.
 // ----------------------------------------------------------------------------
 WorkloadResult run_workload(const WorkloadParams& params) {
     std::mt19937_64 rng(params.seed);
@@ -70,18 +77,28 @@ WorkloadResult run_workload(const WorkloadParams& params) {
     const auto deadline = start + std::chrono::seconds(params.duration_secs);
 
     while (std::chrono::steady_clock::now() < deadline) {
+        const auto tick_end = std::chrono::steady_clock::now()
+                            + std::chrono::milliseconds(TICK_MS);
+
         const double m = dist(rng);
         if (m > params.intensity) {
+            // Sleep tick: yield the CPU for one tick window.
             std::this_thread::sleep_for(std::chrono::milliseconds(TICK_MS));
             ++res.sleep_ops;
         } else {
             const double n = dist(rng);
             if (n > params.io_mix) {
-                do_cpu_work();
-                ++res.cpu_ops;
+                // CPU phase: hammer do_cpu_work() until the tick window closes.
+                while (std::chrono::steady_clock::now() < tick_end) {
+                    do_cpu_work();
+                    ++res.cpu_ops;
+                }
             } else {
-                do_io_work(params.tmp_dir);
-                ++res.io_ops;
+                // I/O phase: keep issuing fsync writes until the tick window closes.
+                while (std::chrono::steady_clock::now() < tick_end) {
+                    do_io_work(params.tmp_dir);
+                    ++res.io_ops;
+                }
             }
         }
     }
