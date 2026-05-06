@@ -59,8 +59,15 @@ def spawn_workers(
     intensity: float,
     duration: int,
     tmp_dir: str,
+    base_seed: int = 42,
+    seed_offset: int = 0,
 ) -> list[dict]:
-    """Launch n workers in parallel, wait for all, return parsed JSON results."""
+    """Launch n workers in parallel, wait for all, return parsed JSON results.
+
+    Each worker gets seed = base_seed + seed_offset + worker_index so that
+    workers within a run diverge from each other, but the overall experiment
+    is fully reproducible given the same base_seed.
+    """
     procs = [
         subprocess.Popen(
             [
@@ -69,11 +76,12 @@ def spawn_workers(
                 "--intensity", str(intensity),
                 "--duration",  str(duration),
                 "--tmp-dir",   tmp_dir,
+                "--seed",      str(base_seed + seed_offset + i),
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
-        for _ in range(n)
+        for i in range(n)
     ]
     results: list[dict] = []
     for p in procs:
@@ -95,11 +103,12 @@ def total_throughput(results: list[dict]) -> float:
 # ---------------------------------------------------------------------------
 
 def run_saturation(
-    io_mix: float   = 0.3,
+    io_mix: float    = 0.3,
     intensity: float = 0.75,
-    max_procs: int  = 32,
-    duration: int   = DEFAULT_DUR,
-    tmp_dir: str    = DEFAULT_TMP,
+    max_procs: int   = 32,
+    duration: int    = DEFAULT_DUR,
+    tmp_dir: str     = DEFAULT_TMP,
+    base_seed: int   = 42,
 ) -> dict:
     """
     Ramp the number of baseline-workload processes from 1 to max_procs.
@@ -120,7 +129,8 @@ def run_saturation(
 
     for n in range(1, max_procs + 1):
         print(f"[saturation]  n={n} ...", end=" ", flush=True)
-        results = spawn_workers(n, io_mix, intensity, duration, tmp_dir)
+        results = spawn_workers(n, io_mix, intensity, duration, tmp_dir,
+                                base_seed=base_seed, seed_offset=n * 1000)
         if not results:
             print("(no results – skipping)")
             continue
@@ -142,7 +152,7 @@ def run_saturation(
 
     return {
         "type":             "saturation",
-        "params":           {"io_mix": io_mix, "intensity": intensity},
+        "params":           {"io_mix": io_mix, "intensity": intensity, "seed": base_seed},
         "data_points":      data_points,
         "saturation_procs": peak_procs,
         "peak_throughput":  peak_tput,
@@ -162,6 +172,7 @@ def measure_slack(
     duration:           int   = DEFAULT_DUR,
     tmp_dir:            str   = DEFAULT_TMP,
     drop_pct:           float = 0.05,
+    base_seed:          int   = 42,
 ) -> dict:
     """
     Determine how much of `slack_resource`-only load can be added before the
@@ -184,19 +195,27 @@ def measure_slack(
 
     data_points: list[dict] = []
 
+    probe_index = 0
+
     def probe(slack_n: int, slack_intensity: float) -> tuple[bool, float]:
+        nonlocal probe_index
         """
         Run baseline workers and slack workers simultaneously (best effort).
         Returns (dropped, observed_baseline_tput).
         """
         # We run both sets of workers concurrently in the same shell; each
         # worker already runs for `duration` seconds, so they naturally overlap.
+        # Use distinct seed ranges for baseline vs slack workers, and per-probe
+        # offsets so every probe is independently seeded but deterministic.
         base_results  = spawn_workers(
-            baseline_procs, baseline_io_mix, baseline_intensity, duration, tmp_dir
+            baseline_procs, baseline_io_mix, baseline_intensity, duration, tmp_dir,
+            base_seed=base_seed, seed_offset=100_000 + probe_index * 1000,
         )
         slack_results = spawn_workers(
-            slack_n, slack_io_mix, slack_intensity, duration, tmp_dir
+            slack_n, slack_io_mix, slack_intensity, duration, tmp_dir,
+            base_seed=base_seed, seed_offset=200_000 + probe_index * 1000,
         )
+        probe_index += 1
         obs_tput  = total_throughput(base_results)
         drop_frac = (baseline_tput - obs_tput) / max(baseline_tput, 1.0)
         dropped   = drop_frac >= drop_pct
@@ -280,6 +299,8 @@ def main() -> None:
     parser.add_argument("--output",     default="results/experiment.json")
     parser.add_argument("--drop-pct",   type=float, default=0.05,  metavar="F",
                         help="Fraction of baseline throughput drop to count as interference")
+    parser.add_argument("--seed",       type=int,   default=42,    metavar="N",
+                        help="Base RNG seed for all workers (fixed for reproducibility)")
     args = parser.parse_args()
 
     _check_worker()
@@ -294,6 +315,7 @@ def main() -> None:
             max_procs = args.max_procs,
             duration  = args.duration,
             tmp_dir   = args.tmp_dir,
+            base_seed = args.seed,
         )
         all_results.append(sat)
 
@@ -311,6 +333,7 @@ def main() -> None:
                 duration           = args.duration,
                 tmp_dir            = args.tmp_dir,
                 drop_pct           = args.drop_pct,
+                base_seed          = args.seed,
             ))
 
         if args.mode in ("slack-io", "full"):
@@ -323,6 +346,7 @@ def main() -> None:
                 duration           = args.duration,
                 tmp_dir            = args.tmp_dir,
                 drop_pct           = args.drop_pct,
+                base_seed          = args.seed,
             ))
 
     out_path = Path(args.output)

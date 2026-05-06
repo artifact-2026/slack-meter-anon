@@ -62,7 +62,7 @@ void do_io_work(const std::string& tmp_dir) {
 //      Else              →  I/O work
 // ----------------------------------------------------------------------------
 WorkloadResult run_workload(const WorkloadParams& params) {
-    std::mt19937_64 rng(std::random_device{}());
+    std::mt19937_64 rng(params.seed);
     std::uniform_real_distribution<double> dist(0.0, 1.0);
 
     WorkloadResult res{};
