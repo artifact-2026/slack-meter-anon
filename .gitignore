@@ -1,0 +1,8 @@
+build/
+results/
+/tmp/slack-meter/
+*.o
+*.a
+__pycache__/
+*.pyc
+.DS_Store
