@@ -14,6 +14,7 @@ struct WorkloadParams {
     double      intensity;     // [0, 1]
     int         duration_secs; // how long to run
     std::string tmp_dir;       // scratch space for I/O ops
+    uint64_t    seed;          // RNG seed (fixed for reproducibility)
 };
 
 // ----------------------------------------------------------------------------
