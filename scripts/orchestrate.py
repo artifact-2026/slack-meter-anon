@@ -200,22 +200,52 @@ def measure_slack(
     def probe(slack_n: int, slack_intensity: float) -> tuple[bool, float]:
         nonlocal probe_index
         """
-        Run baseline workers and slack workers simultaneously (best effort).
-        Returns (dropped, observed_baseline_tput).
+        Spawn baseline and slack workers simultaneously in one batch, wait for
+        all to finish, then return (dropped, observed_baseline_tput).
+
+        Critically: all Popen() calls happen before any communicate(), so every
+        worker is running at the same time and competing for the same resources.
         """
-        # We run both sets of workers concurrently in the same shell; each
-        # worker already runs for `duration` seconds, so they naturally overlap.
-        # Use distinct seed ranges for baseline vs slack workers, and per-probe
-        # offsets so every probe is independently seeded but deterministic.
-        base_results  = spawn_workers(
-            baseline_procs, baseline_io_mix, baseline_intensity, duration, tmp_dir,
-            base_seed=base_seed, seed_offset=100_000 + probe_index * 1000,
-        )
-        slack_results = spawn_workers(
-            slack_n, slack_io_mix, slack_intensity, duration, tmp_dir,
-            base_seed=base_seed, seed_offset=200_000 + probe_index * 1000,
-        )
+        def make_cmd(io_mix: float, intensity: float, seed: int) -> list[str]:
+            return [
+                str(WORKER_BIN),
+                "--io-mix",    str(io_mix),
+                "--intensity", str(intensity),
+                "--duration",  str(duration),
+                "--tmp-dir",   tmp_dir,
+                "--seed",      str(seed),
+            ]
+
+        # Launch all workers before waiting on any of them.
+        base_seed_offset  = 100_000 + probe_index * 1000
+        slack_seed_offset = 200_000 + probe_index * 1000
         probe_index += 1
+
+        base_procs_list = [
+            subprocess.Popen(make_cmd(baseline_io_mix, baseline_intensity,
+                                      base_seed + base_seed_offset + i),
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            for i in range(baseline_procs)
+        ]
+        slack_procs_list = [
+            subprocess.Popen(make_cmd(slack_io_mix, slack_intensity,
+                                      base_seed + slack_seed_offset + i),
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            for i in range(slack_n)
+        ]
+
+        # Now collect — workers are already running concurrently above.
+        base_results: list[dict] = []
+        for p in base_procs_list:
+            stdout, _ = p.communicate()
+            if p.returncode == 0 and stdout.strip():
+                try:
+                    base_results.append(json.loads(stdout.strip()))
+                except json.JSONDecodeError:
+                    pass
+        for p in slack_procs_list:
+            p.communicate()  # drain; we only care about baseline throughput
+
         obs_tput  = total_throughput(base_results)
         drop_frac = (baseline_tput - obs_tput) / max(baseline_tput, 1.0)
         dropped   = drop_frac >= drop_pct
@@ -228,7 +258,13 @@ def measure_slack(
 
     while slack_procs <= MAX_SLACK_PROCS:
         print(f"[slack-{slack_resource}]  sweeping intensity with {slack_procs} extra proc(s)")
-        lo, hi    = 0.05, 1.0
+        # Start the search above the previously confirmed safe load.
+        # We know (slack_procs-1) procs at intensity=1.0 caused no drop, so
+        # the total load (slack_procs-1)*1.0 is safe.  Set lo so that
+        # slack_procs * lo equals that confirmed-safe load, ensuring every
+        # probe explores genuinely new territory.
+        lo        = (slack_procs - 1) / slack_procs
+        hi        = 1.0
         drop_seen = False
 
         # ~6 bisections → precision ≈ 0.015
