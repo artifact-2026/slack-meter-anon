@@ -10,6 +10,7 @@
 #   MODE=<mode>        saturation | slack-cpu | slack-io | full (default: full)
 #   IO_MIX=<float>     fraction of non-sleep ops that are I/O (default: 0.3)
 #   INTENSITY=<float>  fraction of ticks that do real work (default: 0.75)
+#   DROP_PCT=<float>   throughput drop fraction that counts as interference (default: 0.05)
 
 set -euo pipefail
 
@@ -23,6 +24,7 @@ TMP_DIR="${TMP_DIR:-/tmp/slack-meter}"
 MODE="${MODE:-full}"
 IO_MIX="${IO_MIX:-0.3}"
 INTENSITY="${INTENSITY:-0.75}"
+DROP_PCT="${DROP_PCT:-0.05}"
 
 # ---------------------------------------------------------------------------
 log() { echo "[run] $*"; }
@@ -33,7 +35,7 @@ cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -S "$REPO" -q
 cmake --build "$BUILD" --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu)" -q
 
 # ---------------------------------------------------------------------------
-log "Running experiment (mode=$MODE  duration=${DURATION}s  max_procs=$MAX_PROCS  io_mix=$IO_MIX  intensity=$INTENSITY)..."
+log "Running experiment (mode=$MODE  duration=${DURATION}s  max_procs=$MAX_PROCS  io_mix=$IO_MIX  intensity=$INTENSITY, drop_pct=$DROP_PCT)..."
 mkdir -p "$RESULTS"
 
 python3 "$REPO/scripts/orchestrate.py" \
@@ -43,6 +45,7 @@ python3 "$REPO/scripts/orchestrate.py" \
     --tmp-dir    "$TMP_DIR"            \
     --io-mix     "$IO_MIX"             \
     --intensity  "$INTENSITY"          \
+    --drop-pct   "$DROP_PCT"           \
     --output     "$RESULTS/experiment.json"
 
 # ---------------------------------------------------------------------------
