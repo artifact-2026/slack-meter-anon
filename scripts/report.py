@@ -52,74 +52,93 @@ def _fig_to_b64(fig) -> str:
     return base64.b64encode(buf.read()).decode()
 
 
-def plot_saturation(data: dict) -> str | None:
-    if not HAS_MPL:
-        return None
-    pts  = data["data_points"]
-    xs   = [p["n_procs"]    for p in pts]
-    ys   = [p["throughput"] for p in pts]
-    sat  = data["saturation_procs"]
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(xs, ys, marker="o", color="#1976D2", linewidth=2, label="Aggregate throughput")
-    ax.axvline(sat, color="#D32F2F", linestyle="--", linewidth=1.5,
-               label=f"Saturation point  n={sat}")
-
-    # Annotate peak
-    peak_y = data["peak_throughput"]
-    ax.annotate(
-        f"Peak: {peak_y:.0f} ops/s",
-        xy=(sat, peak_y),
-        xytext=(sat + 0.5, peak_y * 0.92),
-        arrowprops=dict(arrowstyle="->", color="#D32F2F"),
-        fontsize=9,
-    )
-
-    ax.set_xlabel("Number of Baseline Processes", fontsize=11)
-    ax.set_ylabel("Aggregate Throughput (ops/s)", fontsize=11)
-    ax.set_title("Saturation Experiment", fontsize=13, fontweight="bold")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    return _fig_to_b64(fig)
-
-
-def plot_slack(data: dict) -> str | None:
+def plot_combined(results: list[dict]) -> str | None:
     if not HAS_MPL:
         return None
 
-    resource = data["resource"]
-    pts      = data["data_points"]
-    procs_set = sorted({p["slack_procs"] for p in pts})
+    sat_data = next((r for r in results if r["type"] == "saturation"), None)
+    slack_cpu = next((r for r in results if r["type"] == "slack" and r["resource"] == "cpu"), None)
+    slack_io = next((r for r in results if r["type"] == "slack" and r["resource"] == "io"), None)
 
-    fig, axes = plt.subplots(
-        1, len(procs_set),
-        figsize=(6 * len(procs_set), 5),
-        squeeze=False,
-    )
+    panels = []
+    if sat_data: panels.append(("sat", sat_data))
+    if slack_cpu: panels.append(("slack", slack_cpu))
+    if slack_io: panels.append(("slack", slack_io))
 
-    for col, n_procs in enumerate(procs_set):
-        ax      = axes[0][col]
-        subset  = [p for p in pts if p["slack_procs"] == n_procs]
-        xs      = [p["slack_intensity"]     for p in subset]
-        ys      = [p["baseline_throughput"] for p in subset]
-        colors  = ["#D32F2F" if p["dropped"] else "#388E3C" for p in subset]
+    if not panels:
+        return None
 
-        ax.scatter(xs, ys, c=colors, s=80, zorder=3)
-        ax.set_xlabel(f"{resource.upper()}-only Intensity", fontsize=10)
-        ax.set_ylabel("Baseline Throughput (ops/s)",        fontsize=10)
-        ax.set_title(f"{resource.upper()} Slack — {n_procs} extra proc(s)", fontsize=11)
-        ax.grid(True, alpha=0.3)
+    fig, axes = plt.subplots(1, len(panels), figsize=(6 * len(panels), 5), squeeze=False)
+    axes = axes[0]
 
-        legend_els = [
-            mlines.Line2D([], [], marker="o", linestyle="None",
-                          color="#388E3C", markersize=8, label="No interference"),
-            mlines.Line2D([], [], marker="o", linestyle="None",
-                          color="#D32F2F", markersize=8, label="Drop detected"),
-        ]
-        ax.legend(handles=legend_els, fontsize=9)
+    for i, (ptype, data) in enumerate(panels):
+        ax = axes[i]
+        if ptype == "sat":
+            pts  = data["data_points"]
+            xs   = [p["n_procs"]    for p in pts]
+            ys   = [p["throughput"] for p in pts]
+            sat  = data["saturation_procs"]
 
-    fig.suptitle(f"{resource.upper()} Slack Measurement", fontsize=13, fontweight="bold")
+            ax.plot(xs, ys, marker="o", color="#1976D2", linewidth=2, label="Aggregate throughput")
+            ax.axvline(sat, color="#D32F2F", linestyle="--", linewidth=1.5,
+                       label=f"Saturation point  n={sat}")
+
+            peak_y = data["peak_throughput"]
+            ax.annotate(
+                f"Peak: {peak_y:.0f} ops/s",
+                xy=(sat, peak_y),
+                xytext=(sat + 0.5, peak_y * 0.92),
+                arrowprops=dict(arrowstyle="->", color="#D32F2F"),
+                fontsize=9,
+            )
+
+            ax.set_xlabel("Number of Baseline Processes", fontsize=11)
+            ax.set_ylabel("Aggregate Throughput (ops/s)", fontsize=11)
+            ax.set_title("Saturation", fontsize=13, fontweight="bold")
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+        elif ptype == "slack":
+            resource = data["resource"]
+            pts      = data["data_points"]
+            
+            # Calculate x, y, and color
+            xs = [(p["slack_procs"] - 1) + p["slack_intensity"] for p in pts]
+            ys = [((p["baseline_tput"] - p["ref_tput"]) / max(p["ref_tput"], 1.0)) * 100.0 for p in pts]
+            colors  = ["#D32F2F" if p["dropped"] else "#388E3C" for p in pts]
+
+            # Sort by x for line graph drawing
+            sorted_data = sorted(zip(xs, ys, colors), key=lambda x: x[0])
+            s_xs = [pt[0] for pt in sorted_data]
+            s_ys = [pt[1] for pt in sorted_data]
+            s_colors = [pt[2] for pt in sorted_data]
+
+            # Line graph with shaded area and dotted baseline
+            ax.plot(s_xs, s_ys, color="#757575", linewidth=1.5, zorder=2)
+            ax.fill_between(s_xs, s_ys, 0, color="#757575", alpha=0.15, zorder=1)
+            ax.axhline(0, color="#424242", linestyle=":", linewidth=1.5, zorder=1)
+
+            # Scatter colored points on top
+            ax.scatter(s_xs, s_ys, c=s_colors, s=60, zorder=3)
+            
+            ax.set_xlabel("Sweeping Worker Procs", fontsize=10)
+            ax.set_ylabel("% Change from Baseline Throughput", fontsize=10)
+            
+            title_str = "CPU Slack" if resource == "cpu" else "I/O Slack"
+            ax.set_title(title_str, fontsize=13, fontweight="bold")
+            ax.grid(True, alpha=0.3)
+
+            base_tput_text = f"Baseline ≈ {pts[0]['ref_tput']:.1f} ops/s" if pts else "Baseline Throughput"
+            legend_els = [
+                mlines.Line2D([], [], marker="o", linestyle="None",
+                              color="#388E3C", markersize=8, label="Stable throughput"),
+                mlines.Line2D([], [], marker="o", linestyle="None",
+                              color="#D32F2F", markersize=8, label="Drop detected"),
+                mlines.Line2D([], [], marker="", linestyle="None",
+                              label=base_tput_text)
+            ]
+            ax.legend(handles=legend_els, fontsize=9)
+
     fig.tight_layout()
     return _fig_to_b64(fig)
 
@@ -131,7 +150,7 @@ def plot_slack(data: dict) -> str | None:
 _CSS = """
   body  { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
           margin:0; padding:2rem; background:#F5F7FA; color:#222; }
-  .wrap { max-width:1000px; margin:0 auto; }
+  .wrap { max-width:1400px; margin:0 auto; }
   h1    { color:#0D47A1; margin-bottom:.25rem; }
   .sub  { color:#666; margin-top:0; font-size:.95rem; }
   h2    { color:#1565C0; border-bottom:2px solid #BBDEFB; padding-bottom:.4rem; }
@@ -176,11 +195,6 @@ _HTML = """\
 # ---------------------------------------------------------------------------
 
 def _sat_section(data: dict) -> str:
-    img_tag = ""
-    img_b64 = plot_saturation(data)
-    if img_b64:
-        img_tag = f'<img src="data:image/png;base64,{img_b64}" alt="Saturation curve">'
-
     rows = "".join(
         f"<tr><td>{p['n_procs']}</td><td>{p['throughput']:.1f}</td></tr>"
         for p in data["data_points"]
@@ -193,7 +207,6 @@ def _sat_section(data: dict) -> str:
      &nbsp;·&nbsp; <code>intensity={data['params']['intensity']}</code></p>
   <span class="chip">Saturation point: <strong>{data['saturation_procs']} processes</strong></span>
   <span class="chip">Peak throughput: <strong>{data['peak_throughput']:.1f} ops/s</strong></span>
-  {img_tag}
   <h3 style="margin-top:1.5rem">Data Points</h3>
   <table>
     <tr><th>Processes</th><th>Throughput (ops/s)</th></tr>
@@ -205,10 +218,6 @@ def _sat_section(data: dict) -> str:
 def _slack_section(data: dict) -> str:
     resource = data["resource"]
     sm       = data["slack_measurement"]
-    img_tag  = ""
-    img_b64  = plot_slack(data)
-    if img_b64:
-        img_tag = f'<img src="data:image/png;base64,{img_b64}" alt="{resource} slack search">'
 
     verdict_class = f"{resource}-verdict"
     interp = (
@@ -228,7 +237,6 @@ def _slack_section(data: dict) -> str:
     Slack: ({sm['procs']} proc(s), intensity = {sm['intensity']:.3f})
   </div>
   <p style="margin-top:.8rem">{interp}</p>
-  {img_tag}
 </div>"""
 
 
@@ -238,6 +246,10 @@ def _slack_section(data: dict) -> str:
 
 def generate_report(results: list[dict], report_path: str) -> None:
     sections: list[str] = []
+
+    combined_b64 = plot_combined(results)
+    if combined_b64:
+        sections.append(f'<div class="card" style="max-width:100%;"><img src="data:image/png;base64,{combined_b64}" alt="Combined Plots" style="width:100%;"></div>')
 
     sat_data     = next((r for r in results if r["type"] == "saturation"), None)
     slack_items  = [r for r in results if r["type"] == "slack"]
