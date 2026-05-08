@@ -22,15 +22,13 @@ services:
     blkio_config:
       device_write_bps:
         - path: ${BLOCK_DEVICE:-/dev/sda}
-          rate: "400mb"
+          rate: "1000mb"
       device_read_bps:
         - path: ${BLOCK_DEVICE:-/dev/sda}
-          rate: "400mb"
+          rate: "1000mb"
     environment:
       PYTHONUNBUFFERED: "1"
     volumes:
       - ../results:/app/results
     command: >
-      --mode full
-      --duration 30
-      --output results/experiment.json
+      --mode full --duration 30 --output results/experiment.json

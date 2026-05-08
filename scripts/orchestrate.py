@@ -19,6 +19,16 @@ Options
     --tmp-dir       scratch directory for I/O ops  (default: /tmp/slack-meter)
     --output        path for JSON results file  (default: results/experiment.json)
     --drop-pct      fraction throughput drop counted as interference  (default: 0.05)
+    --sat-epsilon   saturation non-increasing threshold.  A measurement resets
+                    the counter (counts as "still growing") only when
+                        tput > sat_epsilon * peak_tput
+                    With sat_epsilon=1.0 any non-new-peak counts (original
+                    behavior).  Values > 1.0 require a minimum improvement
+                    margin before resetting; e.g. 1.02 means throughput must
+                    beat the current peak by at least 2%% to be considered
+                    progress.  This prevents tiny sub-noise gains from
+                    indefinitely deferring saturation detection on a plateau.
+                    (default: 1.02)
 """
 
 from __future__ import annotations
@@ -95,7 +105,33 @@ def spawn_workers(
 
 
 def total_throughput(results: list[dict]) -> float:
+    """Combined (cpu + io) ops/s — used for saturation phase."""
     return sum(r["throughput"] for r in results)
+
+
+def total_cpu_throughput(results: list[dict]) -> float:
+    """CPU-only ops/s across all workers."""
+    return sum(r.get("cpu_throughput", 0.0) for r in results)
+
+
+def total_io_throughput(results: list[dict]) -> float:
+    """I/O-only ops/s across all workers."""
+    return sum(r.get("io_throughput", 0.0) for r in results)
+
+
+def tput_for_resource(results: list[dict], resource: str) -> float:
+    """Return the throughput dimension that matches the slack resource type.
+
+    For slack measurement we compare like-for-like:
+      - CPU slack probes  → baseline cpu_throughput (unaffected by I/O contention)
+      - I/O slack probes  → baseline io_throughput  (unaffected by CPU contention)
+    """
+    if resource == "cpu":
+        return total_cpu_throughput(results)
+    elif resource == "io":
+        return total_io_throughput(results)
+    else:
+        return total_throughput(results)
 
 
 # ---------------------------------------------------------------------------
@@ -103,29 +139,47 @@ def total_throughput(results: list[dict]) -> float:
 # ---------------------------------------------------------------------------
 
 def run_saturation(
-    io_mix: float    = 0.3,
-    intensity: float = 0.75,
-    max_procs: int   = 32,
-    duration: int    = DEFAULT_DUR,
-    tmp_dir: str     = DEFAULT_TMP,
-    base_seed: int   = 42,
+    io_mix: float       = 0.3,
+    intensity: float    = 0.75,
+    max_procs: int      = 32,
+    duration: int       = DEFAULT_DUR,
+    tmp_dir: str        = DEFAULT_TMP,
+    base_seed: int      = 42,
+    sat_epsilon: float  = 1.02,
 ) -> dict:
     """
     Ramp the number of baseline-workload processes from 1 to max_procs.
-    Stop after two consecutive drops in aggregate throughput.
+    Stop after two consecutive "non-increasing" measurements.
+
+    A measurement resets the counter (counts as "still growing") only when:
+        tput > sat_epsilon * peak_tput
+
+    With sat_epsilon=1.0 this is identical to the original behavior (any
+    measurement that fails to beat the current peak increments the counter).
+    Values above 1.0 require a minimum improvement margin — e.g. 1.02 means
+    throughput must exceed the recorded peak by at least 1% to count as
+    continued progress.  This prevents sub-noise gains (~0.3% per step at a
+    plateau) from indefinitely deferring saturation detection.
+
+    IMPORTANT: sat_epsilon must be > 1.0 (or = 1.0 for original behavior).
+    Values < 1.0 are wrong: they allow declining measurements to pass the
+    check (since tput > 0.98*peak is trivially true for small drops), causing
+    peak to be updated downward and the counter to reset on every step.
 
     Returns a dict with:
         saturation_procs  – number of processes at peak throughput
         peak_throughput   – peak aggregate ops/sec
         data_points       – list of {n_procs, throughput}
+        sat_epsilon       – epsilon value used
     """
-    print(f"\n[saturation] io_mix={io_mix}  intensity={intensity}  max_procs={max_procs}")
+    print(f"\n[saturation] io_mix={io_mix}  intensity={intensity}"
+          f"  max_procs={max_procs}  sat_epsilon={sat_epsilon}")
     Path(tmp_dir).mkdir(parents=True, exist_ok=True)
 
-    data_points: list[dict]  = []
-    peak_tput:   float       = 0.0
-    peak_procs:  int         = 1
-    consecutive_drops: int   = 0
+    data_points: list[dict]        = []
+    peak_tput:   float             = 0.0
+    peak_procs:  int               = 1
+    consecutive_non_increasing: int = 0
 
     for n in range(1, max_procs + 1):
         print(f"[saturation]  n={n} ...", end=" ", flush=True)
@@ -139,23 +193,28 @@ def run_saturation(
         data_points.append({"n_procs": n, "throughput": tput})
         print(f"throughput={tput:.1f} ops/s")
 
-        if tput > peak_tput:
+        if tput > sat_epsilon * peak_tput:
+            # New peak: update and reset counter.
+            # Only if the tput is increasing more than 2%, we treat it as a new peak
             peak_tput   = tput
             peak_procs  = n
-            consecutive_drops = 0
+            consecutive_non_increasing = 0
         else:
-            consecutive_drops += 1
+            # Genuine decline beyond epsilon tolerance.
+            consecutive_non_increasing += 1
 
-        if consecutive_drops >= 2:
+        if consecutive_non_increasing >= 2:
             print(f"[saturation] >> saturated at n={peak_procs}  peak={peak_tput:.1f} ops/s")
             break
 
     return {
         "type":             "saturation",
-        "params":           {"io_mix": io_mix, "intensity": intensity, "seed": base_seed},
+        "params":           {"io_mix": io_mix, "intensity": intensity,
+                             "seed": base_seed, "sat_epsilon": sat_epsilon},
         "data_points":      data_points,
         "saturation_procs": peak_procs,
         "peak_throughput":  peak_tput,
+        "sat_epsilon":      sat_epsilon,
     }
 
 
@@ -178,6 +237,12 @@ def measure_slack(
     Determine how much of `slack_resource`-only load can be added before the
     baseline workload's throughput drops by drop_pct.
 
+    Throughput comparison is type-matched to the slack resource:
+      - slack_resource="cpu"  → drop detection uses baseline cpu_throughput only
+      - slack_resource="io"   → drop detection uses baseline io_throughput only
+    This ensures a CPU-only slack thread cannot trigger a false drop via its
+    effect on I/O, and vice versa.
+
     Algorithm
     ---------
     For each additional slack-process count (1, 2, 3, …):
@@ -197,14 +262,23 @@ def measure_slack(
 
     probe_index = 0
 
-    def probe(slack_n: int, slack_intensity: float) -> tuple[bool, float]:
+    def probe(slack_n: int, slack_intensity: float,
+              ref_tput: float | None = None) -> tuple[bool, float]:
         nonlocal probe_index
         """
         Spawn baseline and slack workers simultaneously in one batch, wait for
-        all to finish, then return (dropped, observed_baseline_tput).
+        all to finish, then return (dropped, observed_type_matched_baseline_tput).
 
         Critically: all Popen() calls happen before any communicate(), so every
         worker is running at the same time and competing for the same resources.
+
+        Drop detection uses the throughput dimension that matches slack_resource
+        (cpu_throughput for CPU slack, io_throughput for I/O slack), so we only
+        flag genuine contention on the resource under test.
+
+        ref_tput: reference throughput to compare against for drop detection.
+                  Should be the calibrated live reference for this slack_n round.
+                  Defaults to baseline_tput from saturation if not given.
         """
         def make_cmd(io_mix: float, intensity: float, seed: int) -> list[str]:
             return [
@@ -246,10 +320,27 @@ def measure_slack(
         for p in slack_procs_list:
             p.communicate()  # drain; we only care about baseline throughput
 
-        obs_tput  = total_throughput(base_results)
-        drop_frac = (baseline_tput - obs_tput) / max(baseline_tput, 1.0)
+        # Compare the throughput dimension that matches the resource under test.
+        obs_tput  = tput_for_resource(base_results, slack_resource)
+        _ref      = ref_tput if ref_tput is not None else baseline_tput
+        drop_frac = (_ref - obs_tput) / max(_ref, 1.0)
         dropped   = drop_frac >= drop_pct
         return dropped, obs_tput
+
+    def calibrate(slack_n: int) -> float:
+        """
+        Measure the current baseline throughput (type-matched) with slack_n
+        workers fully sleeping (intensity=0).  This accounts for:
+          - natural throughput drift since the saturation measurement
+          - OS scheduling overhead of having extra processes in the table
+        All subsequent probes for this slack_n round compare against this
+        live reference, so only active resource contention triggers a drop.
+        """
+        print(f"[slack-{slack_resource}]  calibrating with {slack_n} sleeping proc(s)...",
+              end=" ", flush=True)
+        _, tput = probe(slack_n, 0.0)   # intensity=0 → all slack workers sleep
+        print(f"current {slack_resource}_tput baseline = {tput:.1f} ops/s")
+        return tput
 
     slack_procs:     int   = 1
     slack_intensity: float = 1.0
@@ -258,11 +349,15 @@ def measure_slack(
 
     while slack_procs <= MAX_SLACK_PROCS:
         print(f"[slack-{slack_resource}]  sweeping intensity with {slack_procs} extra proc(s)")
-        # Start the search above the previously confirmed safe load.
+
+        # Calibrate: fresh baseline with these slack workers sleeping.
+        # All probes this round compare against this reference, not the stale
+        # saturation measurement, eliminating false drops from drift/overhead.
+        ref = calibrate(slack_procs)
+
+        # Start the binary search above the previously confirmed safe load.
         # We know (slack_procs-1) procs at intensity=1.0 caused no drop, so
-        # the total load (slack_procs-1)*1.0 is safe.  Set lo so that
-        # slack_procs * lo equals that confirmed-safe load, ensuring every
-        # probe explores genuinely new territory.
+        # set lo = (N-1)/N so that N*lo equals that confirmed-safe total load.
         lo        = (slack_procs - 1) / slack_procs
         hi        = 1.0
         drop_seen = False
@@ -270,14 +365,17 @@ def measure_slack(
         # ~6 bisections → precision ≈ 0.015
         for step in range(6):
             mid = (lo + hi) / 2.0
-            dropped, obs = probe(slack_procs, mid)
+            dropped, obs = probe(slack_procs, mid, ref_tput=ref)
             tag = "DROP" if dropped else "ok"
-            print(f"[slack-{slack_resource}]    intensity={mid:.3f}  obs_tput={obs:.1f}  [{tag}]")
+            print(f"[slack-{slack_resource}]    intensity={mid:.3f}"
+                  f"  {slack_resource}_tput={obs:.1f}  [{tag}]")
             data_points.append({
-                "slack_procs":          slack_procs,
-                "slack_intensity":      mid,
-                "baseline_throughput":  obs,
-                "dropped":              dropped,
+                "slack_procs":              slack_procs,
+                "slack_intensity":          mid,
+                "baseline_tput":            obs,
+                "baseline_tput_resource":   slack_resource,
+                "ref_tput":                 ref,
+                "dropped":                  dropped,
             })
             if dropped:
                 hi        = mid
@@ -291,12 +389,14 @@ def measure_slack(
             break
 
         # No drop even at intensity=1 — check explicitly before adding a process
-        dropped_max, obs_max = probe(slack_procs, 1.0)
+        dropped_max, obs_max = probe(slack_procs, 1.0, ref_tput=ref)
         data_points.append({
-            "slack_procs":         slack_procs,
-            "slack_intensity":     1.0,
-            "baseline_throughput": obs_max,
-            "dropped":             dropped_max,
+            "slack_procs":              slack_procs,
+            "slack_intensity":          1.0,
+            "baseline_tput":            obs_max,
+            "baseline_tput_resource":   slack_resource,
+            "ref_tput":                 ref,
+            "dropped":                  dropped_max,
         })
         if dropped_max:
             slack_intensity = 1.0
@@ -333,9 +433,11 @@ def main() -> None:
     parser.add_argument("--max-procs",  type=int,   default=32,    metavar="N")
     parser.add_argument("--tmp-dir",    default=DEFAULT_TMP)
     parser.add_argument("--output",     default="results/experiment.json")
-    parser.add_argument("--drop-pct",   type=float, default=0.05,  metavar="F",
+    parser.add_argument("--drop-pct",    type=float, default=0.05,  metavar="F",
                         help="Fraction of baseline throughput drop to count as interference")
-    parser.add_argument("--seed",       type=int,   default=42,    metavar="N",
+    parser.add_argument("--sat-epsilon", type=float, default=1.02, metavar="F",
+                        help="Min improvement ratio to count as progress (>1.0; default 1.02 → 1%% margin)")
+    parser.add_argument("--seed",        type=int,   default=42,   metavar="N",
                         help="Base RNG seed for all workers (fixed for reproducibility)")
     args = parser.parse_args()
 
@@ -346,12 +448,13 @@ def main() -> None:
 
     if args.mode in ("saturation", "full"):
         sat = run_saturation(
-            io_mix    = args.io_mix,
-            intensity = args.intensity,
-            max_procs = args.max_procs,
-            duration  = args.duration,
-            tmp_dir   = args.tmp_dir,
-            base_seed = args.seed,
+            io_mix      = args.io_mix,
+            intensity   = args.intensity,
+            max_procs   = args.max_procs,
+            duration    = args.duration,
+            tmp_dir     = args.tmp_dir,
+            base_seed   = args.seed,
+            sat_epsilon = args.sat_epsilon,
         )
         all_results.append(sat)
 
