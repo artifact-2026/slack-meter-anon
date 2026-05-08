@@ -106,5 +106,7 @@ WorkloadResult run_workload(const WorkloadParams& params) {
     const auto finish   = std::chrono::steady_clock::now();
     res.elapsed_secs    = std::chrono::duration<double>(finish - start).count();
     res.throughput      = (res.cpu_ops + res.io_ops) / res.elapsed_secs;
+    res.cpu_throughput  = res.cpu_ops / res.elapsed_secs;
+    res.io_throughput   = res.io_ops  / res.elapsed_secs;
     return res;
 }

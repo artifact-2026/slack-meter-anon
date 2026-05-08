@@ -65,6 +65,8 @@ int main(int argc, char* argv[]) {
            "\"sleep_ops\":%lu,"
            "\"elapsed_secs\":%.4f,"
            "\"throughput\":%.2f,"
+           "\"cpu_throughput\":%.2f,"
+           "\"io_throughput\":%.2f,"
            "\"io_mix\":%.4f,"
            "\"intensity\":%.4f"
            "}\n",
@@ -73,6 +75,8 @@ int main(int argc, char* argv[]) {
            (unsigned long)r.sleep_ops,
            r.elapsed_secs,
            r.throughput,
+           r.cpu_throughput,
+           r.io_throughput,
            params.io_mix,
            params.intensity);
 
