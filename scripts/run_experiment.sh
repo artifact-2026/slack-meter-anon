@@ -6,6 +6,7 @@
 # Optional environment variables:
 #   DURATION=<secs>    worker run duration (default: 30)
 #   MAX_PROCS=<n>      max processes in saturation sweep (default: 32)
+#   MIN_PROCS=<n>      min processes before saturation early-stop (default: 10)
 #   TMP_DIR=<path>     scratch dir for I/O ops (default: /tmp/slack-meter)
 #   MODE=<mode>        saturation | slack-cpu | slack-io | full (default: full)
 #   IO_MIX=<float>     fraction of non-sleep ops that are I/O (default: 0.3)
@@ -20,6 +21,7 @@ RESULTS="$REPO/results"
 
 DURATION="${DURATION:-30}"
 MAX_PROCS="${MAX_PROCS:-32}"
+MIN_PROCS="${MIN_PROCS:-10}"
 TMP_DIR="${TMP_DIR:-/tmp/slack-meter}"
 MODE="${MODE:-full}"
 IO_MIX="${IO_MIX:-0.3}"
@@ -35,13 +37,14 @@ cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -S "$REPO" -q
 cmake --build "$BUILD" --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu)" -q
 
 # ---------------------------------------------------------------------------
-log "Running experiment (mode=$MODE  duration=${DURATION}s  max_procs=$MAX_PROCS  io_mix=$IO_MIX  intensity=$INTENSITY, drop_pct=$DROP_PCT)..."
+log "Running experiment (mode=$MODE  duration=${DURATION}s  max_procs=$MAX_PROCS  min_procs=$MIN_PROCS  io_mix=$IO_MIX  intensity=$INTENSITY  drop_pct=$DROP_PCT)..."
 mkdir -p "$RESULTS"
 
 python3 "$REPO/scripts/orchestrate.py" \
     --mode       "$MODE"               \
     --duration   "$DURATION"           \
     --max-procs  "$MAX_PROCS"          \
+    --min-procs  "$MIN_PROCS"          \
     --tmp-dir    "$TMP_DIR"            \
     --io-mix     "$IO_MIX"             \
     --intensity  "$INTENSITY"          \
