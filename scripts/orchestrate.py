@@ -355,6 +355,13 @@ def measure_slack(
         # saturation measurement, eliminating false drops from drift/overhead.
         ref = calibrate(slack_procs)
 
+        # If the baseline throughput for this resource is zero, further
+        # processes won't produce meaningful results — cap the sweep here.
+        if ref == 0:
+            print(f"[slack-{slack_resource}]  WARNING: baseline {slack_resource}_tput is zero;"
+                  f" capping sweep at {slack_procs} proc(s)")
+            MAX_SLACK_PROCS = slack_procs
+
         # Start the binary search above the previously confirmed safe load.
         # We know (slack_procs-1) procs at intensity=1.0 caused no drop, so
         # set lo = (N-1)/N so that N*lo equals that confirmed-safe total load.
