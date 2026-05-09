@@ -330,9 +330,10 @@ def measure_slack(
                 except json.JSONDecodeError:
                     pass
 
-        # Compare the throughput dimension that matches the resource under test.
-        obs_tput   = tput_for_resource(base_results,  slack_resource)
-        slack_tput = tput_for_resource(slack_results, slack_resource)
+        # Use total (cpu + io) throughput for both baseline drop detection and
+        # slack reporting, so contention on any resource is reflected.
+        obs_tput   = total_throughput(base_results)
+        slack_tput = total_throughput(slack_results)
         _ref      = ref_tput if ref_tput is not None else baseline_tput
         drop_frac = (_ref - obs_tput) / max(_ref, 1.0)
         dropped   = drop_frac >= drop_pct
@@ -340,8 +341,8 @@ def measure_slack(
 
     def calibrate(slack_n: int) -> float:
         """
-        Measure the current baseline throughput (type-matched) with slack_n
-        workers fully sleeping (intensity=0).  This accounts for:
+        Measure the current total baseline throughput with slack_n workers fully
+        sleeping (intensity=0).  This accounts for:
           - natural throughput drift since the saturation measurement
           - OS scheduling overhead of having extra processes in the table
         All subsequent probes for this slack_n round compare against this
@@ -350,7 +351,7 @@ def measure_slack(
         print(f"[slack-{slack_resource}]  calibrating with {slack_n} sleeping proc(s)...",
               end=" ", flush=True)
         _, tput, _ = probe(slack_n, 0.0)   # intensity=0 → all slack workers sleep
-        print(f"current {slack_resource}_tput baseline = {tput:.1f} ops/s")
+        print(f"current baseline_tput = {tput:.1f} ops/s")
         return tput
 
     slack_procs:     int   = 1
@@ -379,16 +380,15 @@ def measure_slack(
             dropped, obs, slack_obs = probe(slack_procs, mid, ref_tput=ref)
             tag = "DROP" if dropped else "ok"
             print(f"[slack-{slack_resource}]    intensity={mid:.3f}"
-                  f"  {slack_resource}_tput={obs:.1f}"
-                  f"  slack_{slack_resource}_tput={slack_obs:.1f}  [{tag}]")
+                  f"  baseline_tput={obs:.1f}"
+                  f"  slack_tput={slack_obs:.1f}  [{tag}]")
             data_points.append({
-                "slack_procs":              slack_procs,
-                "slack_intensity":          mid,
-                "baseline_tput":            obs,
-                "slack_tput":               slack_obs,
-                "baseline_tput_resource":   slack_resource,
-                "ref_tput":                 ref,
-                "dropped":                  dropped,
+                "slack_procs":     slack_procs,
+                "slack_intensity": mid,
+                "baseline_tput":   obs,
+                "slack_tput":      slack_obs,
+                "ref_tput":        ref,
+                "dropped":         dropped,
             })
             if dropped:
                 hi        = mid
@@ -404,13 +404,12 @@ def measure_slack(
         # No drop even at intensity=1 — check explicitly before adding a process
         dropped_max, obs_max, slack_obs_max = probe(slack_procs, 1.0, ref_tput=ref)
         data_points.append({
-            "slack_procs":              slack_procs,
-            "slack_intensity":          1.0,
-            "baseline_tput":            obs_max,
-            "slack_tput":               slack_obs_max,
-            "baseline_tput_resource":   slack_resource,
-            "ref_tput":                 ref,
-            "dropped":                  dropped_max,
+            "slack_procs":     slack_procs,
+            "slack_intensity": 1.0,
+            "baseline_tput":   obs_max,
+            "slack_tput":      slack_obs_max,
+            "ref_tput":        ref,
+            "dropped":         dropped_max,
         })
         if dropped_max:
             slack_intensity = 1.0
