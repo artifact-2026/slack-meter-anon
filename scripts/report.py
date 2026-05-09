@@ -85,7 +85,7 @@ def plot_combined(results: list[dict]) -> str | None:
             ax.annotate(
                 f"Saturation Point: {peak_y:.0f} ops/s",
                 xy=(sat, peak_y),
-                xytext=(sat + 1.5, peak_y),
+                xytext=(sat + 0.1, peak_y * 0.92),
                 arrowprops=dict(arrowstyle="->", color="#D32F2F"),
                 fontsize=9,
                 va="center"
@@ -155,7 +155,7 @@ def plot_combined(results: list[dict]) -> str | None:
             labels.append("Drop exceeds threshold")
             handles.append(mlines.Line2D([], [], color="#A5D6A7", marker="s", linestyle="None", markersize=10))
             labels.append("Slack")
-            ax.legend(handles, labels, loc="lower left", bbox_to_anchor=(0.85, 0.45), fontsize=9)
+            ax.legend(handles, labels, loc="lower left", bbox_to_anchor=(0.05, 0.05), fontsize=9)
 
     fig.tight_layout()
     return _fig_to_b64(fig)
