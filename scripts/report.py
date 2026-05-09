@@ -79,22 +79,20 @@ def plot_combined(results: list[dict]) -> str | None:
             ys   = [p["throughput"] for p in pts]
             sat  = data["saturation_procs"]
 
-            ax.plot(xs, ys, marker="o", color="#1976D2", linewidth=2, label="Aggregate throughput")
-            ax.axvline(sat, color="#D32F2F", linestyle="--", linewidth=1.5,
-                       label=f"Saturation point  n={sat}")
+            ax.plot(xs, ys, marker="o", color="#1976D2", linewidth=2)
 
             peak_y = data["peak_throughput"]
             ax.annotate(
-                f"Peak: {peak_y:.0f} ops/s",
+                f"Saturation Point: {peak_y:.0f} ops/s",
                 xy=(sat, peak_y),
                 xytext=(sat + 0.5, peak_y * 0.92),
                 arrowprops=dict(arrowstyle="->", color="#D32F2F"),
                 fontsize=9,
             )
 
-            ax.set_xlabel("Number of Baseline Processes", fontsize=11)
+            ax.set_xlabel("Baseline Process", fontsize=11)
             ax.set_ylabel("Aggregate Throughput (ops/s)", fontsize=11)
-            ax.set_title("Saturation", fontsize=13, fontweight="bold")
+            ax.set_title("Inducing Saturation", fontsize=13, fontweight="bold")
             ax.legend()
             ax.grid(True, alpha=0.3)
 
@@ -102,42 +100,60 @@ def plot_combined(results: list[dict]) -> str | None:
             resource = data["resource"]
             pts      = data["data_points"]
             
-            # Calculate x, y, and color
+            # Calculate x, y_base, y_slack
             xs = [(p["slack_procs"] - 1) + p["slack_intensity"] for p in pts]
-            ys = [((p["baseline_tput"] - p["ref_tput"]) / max(p["ref_tput"], 1.0)) * 100.0 for p in pts]
-            colors  = ["#D32F2F" if p["dropped"] else "#388E3C" for p in pts]
+            ys_base = [p["baseline_tput"] for p in pts]
+            ys_slack = [p.get("slack_tput", 0.0) for p in pts]
+            dropped = [p["dropped"] for p in pts]
 
-            # Sort by x for line graph drawing
-            sorted_data = sorted(zip(xs, ys, colors), key=lambda x: x[0])
-            s_xs = [pt[0] for pt in sorted_data]
-            s_ys = [pt[1] for pt in sorted_data]
-            s_colors = [pt[2] for pt in sorted_data]
+            # Sort by x
+            sorted_data = sorted(zip(xs, ys_base, ys_slack, dropped), key=lambda x: x[0])
+            s_xs = np.array([pt[0] for pt in sorted_data])
+            s_ys_base = np.array([pt[1] for pt in sorted_data])
+            s_ys_slack = np.array([pt[2] for pt in sorted_data])
+            s_dropped = np.array([pt[3] for pt in sorted_data])
 
-            # Line graph with shaded area and dotted baseline
-            ax.plot(s_xs, s_ys, color="#757575", linewidth=1.5, zorder=2)
-            ax.fill_between(s_xs, s_ys, 0, color="#757575", alpha=0.15, zorder=1)
-            ax.axhline(0, color="#424242", linestyle=":", linewidth=1.5, zorder=1)
+            # Find the max safe slack boundary
+            safe_xs = [x for x, drop in zip(s_xs, s_dropped) if not drop]
+            max_safe_x = max(safe_xs) if safe_xs else s_xs[0]
 
-            # Scatter colored points on top
-            ax.scatter(s_xs, s_ys, c=s_colors, s=60, zorder=3)
+            # Area below the blue line (Baseline)
+            ax.fill_between(s_xs, 0, s_ys_base, color="#BBDEFB", alpha=0.8)
+
+            # Area above the blue line (Slack)
+            ax.fill_between(s_xs, s_ys_base, s_ys_base + s_ys_slack, 
+                            where=(s_xs <= max_safe_x), color="#A5D6A7", alpha=0.9, interpolate=True)
+
+            # Draw strong borders for the areas
+            ax.plot(s_xs, s_ys_base, color="#1565C0", linewidth=2, label='Baseline Throughput')
+            ax.plot(s_xs, s_ys_base + s_ys_slack, color="saddlebrown", linewidth=2, label='Total (Baseline + Sweeping) Throughput')
+
+            # Scatter points on both the Blue line and the Top (Brown) line
+            scatter_colors = ["#D32F2F" if d else "#388E3C" for d in s_dropped]
+            ax.scatter(s_xs, s_ys_base, color=scatter_colors, s=40, zorder=4)
+            ax.scatter(s_xs, s_ys_base + s_ys_slack, color=scatter_colors, s=40, zorder=4)
             
-            ax.set_xlabel("Sweeping Worker Procs", fontsize=10)
-            ax.set_ylabel("% Change from Baseline Throughput", fontsize=10)
+            ax.set_xlabel("Sweeping Process", fontsize=10)
+            ax.set_ylabel("Throughput (ops/s)", fontsize=10)
             
-            title_str = "CPU Slack" if resource == "cpu" else "I/O Slack"
+            # Limit y-axis bottom to "skip" the mid range and focus on the lines
+            y_min = min(s_ys_base)
+            if y_min > 0:
+                ax.set_ylim(bottom=y_min * 0.85)
+            
+            title_str = "Sweeping CPU Slack" if resource == "cpu" else "Sweeping I/O Slack"
             ax.set_title(title_str, fontsize=13, fontweight="bold")
             ax.grid(True, alpha=0.3)
 
-            base_tput_text = f"Baseline ≈ {pts[0]['ref_tput']:.1f} ops/s" if pts else "Baseline Throughput"
-            legend_els = [
-                mlines.Line2D([], [], marker="o", linestyle="None",
-                              color="#388E3C", markersize=8, label="Stable throughput"),
-                mlines.Line2D([], [], marker="o", linestyle="None",
-                              color="#D32F2F", markersize=8, label="Drop detected"),
-                mlines.Line2D([], [], marker="", linestyle="None",
-                              label=base_tput_text)
-            ]
-            ax.legend(handles=legend_els, fontsize=9)
+            # Rebuild legend
+            handles, labels = ax.get_legend_handles_labels()
+            handles.append(mlines.Line2D([], [], marker="o", linestyle="None", color="#388E3C", markersize=8))
+            labels.append("Stable (within tolerance)")
+            handles.append(mlines.Line2D([], [], marker="o", linestyle="None", color="#D32F2F", markersize=8))
+            labels.append("Drop exceeds threshold")
+            handles.append(mlines.Line2D([], [], color="#A5D6A7", marker="s", linestyle="None", markersize=10))
+            labels.append("Slack")
+            ax.legend(handles, labels, loc="center right", bbox_to_anchor=(0.95, 0.35), fontsize=9)
 
     fig.tight_layout()
     return _fig_to_b64(fig)
