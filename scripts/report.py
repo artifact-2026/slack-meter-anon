@@ -85,9 +85,10 @@ def plot_combined(results: list[dict]) -> str | None:
             ax.annotate(
                 f"Saturation Point: {peak_y:.0f} ops/s",
                 xy=(sat, peak_y),
-                xytext=(sat + 0.5, peak_y * 0.92),
+                xytext=(sat + 1.5, peak_y),
                 arrowprops=dict(arrowstyle="->", color="#D32F2F"),
                 fontsize=9,
+                va="center"
             )
 
             ax.set_xlabel("Baseline Process", fontsize=11)
@@ -121,8 +122,9 @@ def plot_combined(results: list[dict]) -> str | None:
             ax.fill_between(s_xs, 0, s_ys_base, color="#BBDEFB", alpha=0.8)
 
             # Area above the blue line (Slack)
-            ax.fill_between(s_xs, s_ys_base, s_ys_base + s_ys_slack, 
-                            where=(s_xs <= max_safe_x), color="#A5D6A7", alpha=0.9, interpolate=True)
+            mask = s_xs <= max_safe_x
+            ax.fill_between(s_xs[mask], s_ys_base[mask], (s_ys_base + s_ys_slack)[mask], 
+                            color="#A5D6A7", alpha=0.9)
 
             # Draw strong borders for the areas
             ax.plot(s_xs, s_ys_base, color="#1565C0", linewidth=2, label='Baseline Throughput')
@@ -153,7 +155,7 @@ def plot_combined(results: list[dict]) -> str | None:
             labels.append("Drop exceeds threshold")
             handles.append(mlines.Line2D([], [], color="#A5D6A7", marker="s", linestyle="None", markersize=10))
             labels.append("Slack")
-            ax.legend(handles, labels, loc="center right", bbox_to_anchor=(0.95, 0.35), fontsize=9)
+            ax.legend(handles, labels, loc="center right", bbox_to_anchor=(0.85, 0.45), fontsize=9)
 
     fig.tight_layout()
     return _fig_to_b64(fig)
