@@ -102,7 +102,7 @@ def plot_combined(results: list[dict]) -> str | None:
             pts      = data["data_points"]
             
             # Calculate x, y_base, y_slack
-            xs = [(p["slack_procs"] - 1) + p["slack_intensity"] for p in pts]
+            xs = [p["slack_procs"] * p["slack_intensity"] for p in pts]
             ys_base = [p["baseline_tput"] for p in pts]
             ys_slack = [p.get("slack_tput", 0.0) for p in pts]
             dropped = [p["dropped"] for p in pts]
@@ -155,7 +155,7 @@ def plot_combined(results: list[dict]) -> str | None:
             labels.append("Drop exceeds threshold")
             handles.append(mlines.Line2D([], [], color="#A5D6A7", marker="s", linestyle="None", markersize=10))
             labels.append("Slack")
-            ax.legend(handles, labels, loc="center right", bbox_to_anchor=(0.85, 0.45), fontsize=9)
+            ax.legend(handles, labels, loc="lower left", bbox_to_anchor=(0.85, 0.45), fontsize=9)
 
     fig.tight_layout()
     return _fig_to_b64(fig)
