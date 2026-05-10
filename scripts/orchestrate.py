@@ -368,10 +368,19 @@ def measure_slack(
                 except json.JSONDecodeError:
                     pass
 
-        # Use total (cpu + io) throughput for both baseline drop detection and
-        # slack reporting, so contention on any resource is reflected.
-        obs_tput   = total_throughput(base_results)
-        slack_tput = total_throughput(slack_results)
+        # Use resource-matched throughput for drop detection when the baseline
+        # actually generates work of that type (non-zero), so contention on the
+        # swept resource is not masked by the other resource staying stable
+        # (e.g. io_mix=0.7 baseline's CPU ops cushioning total_tput during I/O
+        # saturation).
+        # Fall back to total_throughput when the baseline has zero resource-
+        # specific throughput (e.g. pure-CPU baseline has io_throughput=0), so
+        # indirect contention effects are still captured in the total.
+        # Because calibrate() goes through probe(), both ref and obs use the
+        # same metric — the comparison is always apples-to-apples.
+        obs_resource = tput_for_resource(base_results, slack_resource)
+        obs_tput     = obs_resource if obs_resource > 0 else total_throughput(base_results)
+        slack_tput   = total_throughput(slack_results)  # slack is pure resource, so total == resource tput
         _ref      = ref_tput if ref_tput is not None else baseline_tput
         drop_frac = (_ref - obs_tput) / max(_ref, 1.0)
         dropped   = drop_frac >= drop_pct
@@ -379,17 +388,20 @@ def measure_slack(
 
     def calibrate(slack_n: int) -> float:
         """
-        Measure the current total baseline throughput with slack_n workers fully
-        sleeping (intensity=0).  This accounts for:
+        Measure the current resource-matched baseline throughput with slack_n
+        workers fully sleeping (intensity=0).  This accounts for:
           - natural throughput drift since the saturation measurement
           - OS scheduling overhead of having extra processes in the table
         All subsequent probes for this slack_n round compare against this
         live reference, so only active resource contention triggers a drop.
+        The reference uses the same resource-matched throughput dimension as
+        drop detection (cpu_throughput for CPU slack, io_throughput for I/O
+        slack) so the comparison is always apples-to-apples.
         """
         print(f"[slack-{slack_resource}]  calibrating with {slack_n} sleeping proc(s)...",
               end=" ", flush=True)
         _, tput, _ = probe(slack_n, 0.0)   # intensity=0 → all slack workers sleep
-        print(f"current baseline_tput = {tput:.1f} ops/s")
+        print(f"current baseline_{slack_resource}_tput = {tput:.1f} ops/s")
         return tput
 
     slack_procs:     int   = 1
