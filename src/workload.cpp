@@ -20,7 +20,7 @@ static constexpr size_t IO_BUF_SIZE = 4096;
 
 // Iterations per CPU work unit.  Large enough to do real work per call,
 // small enough that the tick loop can count many completions per 250ms.
-static constexpr int CPU_ITERS = 101'000;
+static constexpr int CPU_ITERS = 18'400;
 
 // ----------------------------------------------------------------------------
 // do_cpu_work – one unit of CPU work: a tight arithmetic loop.
