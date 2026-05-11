@@ -100,62 +100,100 @@ def plot_combined(results: list[dict]) -> str | None:
         elif ptype == "slack":
             resource = data["resource"]
             pts      = data["data_points"]
-            
-            # Calculate x, y_base, y_slack
-            xs = [p["slack_procs"] * p["slack_intensity"] for p in pts]
-            ys_base = [p["baseline_tput"] for p in pts]
-            ys_slack = [p.get("slack_tput", 0.0) for p in pts]
-            dropped = [p["dropped"] for p in pts]
+
+            # ---- Determine layer order based on sweep type -----------------
+            # Sweeping CPU: bottom=baseline_io, middle=baseline_cpu, top=slack_cpu
+            # Sweeping I/O: bottom=baseline_cpu, middle=baseline_io, top=slack_io
+            if resource == "cpu":
+                bottom_key  = "baseline_io_tput"   # other resource (bottom layer)
+                middle_key  = "baseline_cpu_tput"  # swept resource (middle layer)
+                bottom_lbl  = "Baseline I/O"
+                middle_lbl  = "Baseline CPU"
+                slack_lbl   = "Slack CPU"
+                bottom_color = "#FFE082"   # amber-ish for I/O
+                middle_color = "#90CAF9"   # blue for CPU
+                slack_color  = "#A5D6A7"   # green for slack
+                bottom_line  = "#F57F17"
+                middle_line  = "#1565C0"
+            else:
+                bottom_key  = "baseline_cpu_tput"  # other resource (bottom layer)
+                middle_key  = "baseline_io_tput"   # swept resource (middle layer)
+                bottom_lbl  = "Baseline CPU"
+                middle_lbl  = "Baseline I/O"
+                slack_lbl   = "Slack I/O"
+                bottom_color = "#90CAF9"   # blue for CPU
+                middle_color = "#FFE082"   # amber for I/O
+                slack_color  = "#A5D6A7"   # green for slack
+                bottom_line  = "#1565C0"
+                middle_line  = "#F57F17"
+
+            # ---- Build arrays -----------------------------------------------
+            xs        = [p["slack_procs"] * p["slack_intensity"] for p in pts]
+            ys_bottom = [p.get(bottom_key, 0.0) for p in pts]
+            ys_middle = [p.get(middle_key, 0.0) for p in pts]
+            ys_slack  = [p.get("slack_tput", 0.0) for p in pts]
+            dropped   = [p["dropped"] for p in pts]
 
             # Sort by x
-            sorted_data = sorted(zip(xs, ys_base, ys_slack, dropped), key=lambda x: x[0])
-            s_xs = np.array([pt[0] for pt in sorted_data])
-            s_ys_base = np.array([pt[1] for pt in sorted_data])
-            s_ys_slack = np.array([pt[2] for pt in sorted_data])
-            s_dropped = np.array([pt[3] for pt in sorted_data])
+            combined = sorted(zip(xs, ys_bottom, ys_middle, ys_slack, dropped),
+                              key=lambda t: t[0])
+            s_xs     = np.array([t[0] for t in combined])
+            s_bot    = np.array([t[1] for t in combined])
+            s_mid    = np.array([t[2] for t in combined])
+            s_slk    = np.array([t[3] for t in combined])
+            s_drop   = np.array([t[4] for t in combined])
 
-            # Find the max safe slack boundary
-            safe_xs = [x for x, drop in zip(s_xs, s_dropped) if not drop]
-            max_safe_x = max(safe_xs) if safe_xs else s_xs[0]
+            # ---- Stacked y values -------------------------------------------
+            y1 = s_bot              # top of bottom layer
+            y2 = s_bot + s_mid      # top of middle layer (= baseline total)
+            y3 = y2 + s_slk        # total including slack — drawn across full x
 
-            # Area below the blue line (Baseline)
-            ax.fill_between(s_xs, 0, s_ys_base, color="#BBDEFB", alpha=0.8)
+            # Safe-zone boundary (slack fill only within this range)
+            safe_xs  = [x for x, d in zip(s_xs, s_drop) if not d]
+            max_safe = max(safe_xs) if safe_xs else s_xs[0]
+            mask     = s_xs <= max_safe
 
-            # Area above the blue line (Slack)
-            mask = s_xs <= max_safe_x
-            ax.fill_between(s_xs[mask], s_ys_base[mask], (s_ys_base + s_ys_slack)[mask], 
-                            color="#A5D6A7", alpha=0.9)
+            # ---- Fill layers ------------------------------------------------
+            ax.fill_between(s_xs, 0,  y1,             color=bottom_color, alpha=0.85,
+                            label=bottom_lbl)
+            ax.fill_between(s_xs, y1, y2,             color=middle_color, alpha=0.85,
+                            label=middle_lbl)
+            # Slack fill only up to the safe boundary
+            ax.fill_between(s_xs[mask], y2[mask], y3[mask],
+                            color=slack_color, alpha=0.90, label=slack_lbl)
 
-            # Draw strong borders for the areas
-            ax.plot(s_xs, s_ys_base, color="#1565C0", linewidth=2, label='Baseline Throughput')
-            ax.plot(s_xs, s_ys_base + s_ys_slack, color="saddlebrown", linewidth=2, label='Total (Baseline + Sweeping) Throughput')
+            # ---- Border lines -----------------------------------------------
+            ax.plot(s_xs, y1, color=bottom_line, linewidth=1.5, linestyle="--")
+            ax.plot(s_xs, y2, color=middle_line, linewidth=2,   label="Baseline Total")
+            # Total (baseline + slack) line runs across the full x-axis
+            ax.plot(s_xs, y3, color="saddlebrown", linewidth=2, label="Baseline + Slack")
 
-            # Scatter points on both the Blue line and the Top (Brown) line
-            scatter_colors = ["#D32F2F" if d else "#388E3C" for d in s_dropped]
-            ax.scatter(s_xs, s_ys_base, color=scatter_colors, s=40, zorder=4)
-            ax.scatter(s_xs, s_ys_base + s_ys_slack, color=scatter_colors, s=40, zorder=4)
-            
-            ax.set_xlabel("Sweeping Process", fontsize=10)
+            # ---- Scatter on baseline total and full top line ----------------
+            scatter_colors = ["#D32F2F" if d else "#388E3C" for d in s_drop]
+            ax.scatter(s_xs, y2, color=scatter_colors, s=40, zorder=5)
+            ax.scatter(s_xs, y3, color=scatter_colors, s=40, zorder=5)
+
+            # ---- Vertical boundary marker -----------------------------------
+            ax.axvline(max_safe, color="#D32F2F", linewidth=1.2, linestyle=":",
+                       alpha=0.7, label=f"Slack boundary ({max_safe:.2f})")
+
+            ax.set_xlabel("Sweeping Process (procs × intensity)", fontsize=10)
             ax.set_ylabel("Throughput (ops/s)", fontsize=10)
-            
-            # Limit y-axis bottom to "skip" the mid range and focus on the lines
-            y_min = min(s_ys_base)
-            if y_min > 0:
-                ax.set_ylim(bottom=y_min * 0.85)
-            
+            ax.set_ylim(bottom=0)
+
             title_str = "Sweeping CPU Slack" if resource == "cpu" else "Sweeping I/O Slack"
             ax.set_title(title_str, fontsize=13, fontweight="bold")
             ax.grid(True, alpha=0.3)
 
-            # Rebuild legend
+            # ---- Legend -----------------------------------------------------
             handles, labels = ax.get_legend_handles_labels()
-            handles.append(mlines.Line2D([], [], marker="o", linestyle="None", color="#388E3C", markersize=8))
+            handles.append(mlines.Line2D([], [], marker="o", linestyle="None",
+                                         color="#388E3C", markersize=8))
             labels.append("Stable (within tolerance)")
-            handles.append(mlines.Line2D([], [], marker="o", linestyle="None", color="#D32F2F", markersize=8))
+            handles.append(mlines.Line2D([], [], marker="o", linestyle="None",
+                                         color="#D32F2F", markersize=8))
             labels.append("Drop exceeds threshold")
-            handles.append(mlines.Line2D([], [], color="#A5D6A7", marker="s", linestyle="None", markersize=10))
-            labels.append("Slack")
-            ax.legend(handles, labels, loc="lower left", bbox_to_anchor=(0.05, 0.05), fontsize=9)
+            ax.legend(handles, labels, loc="upper left", fontsize=8)
 
     fig.tight_layout()
     return _fig_to_b64(fig)
