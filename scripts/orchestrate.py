@@ -414,6 +414,7 @@ def measure_slack(
 
     slack_procs:     int   = 1
     slack_intensity: float = 1.0
+    lo_slack_tput:   float = 0.0   # slack throughput at the max-ok intensity point
     found: bool            = False
     MAX_SLACK_PROCS        = 16
 
@@ -456,10 +457,12 @@ def measure_slack(
                 hi        = mid
                 drop_seen = True
             else:
-                lo = mid
+                lo            = mid
+                lo_slack_tput = slack_obs   # track throughput at highest ok point
 
         if drop_seen:
-            slack_intensity = hi
+            # Report the maximum ok point (lo), not the first drop point (hi).
+            slack_intensity = lo
             found = True
             break
 
@@ -476,22 +479,29 @@ def measure_slack(
             "dropped":           dropped_max,
         })
         if dropped_max:
-            slack_intensity = 1.0
+            # Bisection found no drop; 1.0 drops — max ok point is lo from bisection.
+            slack_intensity = lo
             found = True
             break
 
+        # intensity=1.0 is also safe: record it and add another process.
+        lo_slack_tput = slack_obs_max
         print(f"[slack-{slack_resource}]  no drop at intensity=1.0; adding another process")
         slack_procs += 1
 
     if not found:
         print(f"[slack-{slack_resource}]  WARNING: slack boundary not found within {MAX_SLACK_PROCS} processes")
 
-    print(f"[slack-{slack_resource}]  result = ({slack_procs}, {slack_intensity:.3f})")
+    print(f"[slack-{slack_resource}]  result = ({slack_procs}, {slack_intensity:.3f})  [max-ok]")
 
     return {
         "type":              "slack",
         "resource":          slack_resource,
-        "slack_measurement": {"procs": slack_procs, "intensity": slack_intensity},
+        "slack_measurement": {
+            "procs":      slack_procs,
+            "intensity":  slack_intensity,
+            "slack_tput": lo_slack_tput,
+        },
         "data_points":       data_points,
     }
 
@@ -580,6 +590,45 @@ def main() -> None:
         json.dump(all_results, f, indent=2)
 
     print(f"\n[done] Results → {out_path}")
+
+    # ------------------------------------------------------------------
+    # Append one summary row to a CSV for later plotting.
+    # Columns: io_mix, intensity, saturation_n,
+    #          cpu_slack, cpu_slack_pct, io_slack, io_slack_pct
+    #
+    # *_slack      – max-ok intensity for that resource
+    # *_slack_pct  – slack workers' throughput at that point divided by
+    #                the saturation peak throughput (slack_xput / peak_xput)
+    # ------------------------------------------------------------------
+    csv_path = out_path.with_suffix(".csv")
+    write_header = not csv_path.exists()
+
+    cpu_result = next((r for r in all_results if r.get("resource") == "cpu"), None)
+    io_result  = next((r for r in all_results if r.get("resource") == "io"),  None)
+    peak_tput  = sat["peak_throughput"] if sat else 0.0
+    sat_n      = sat["saturation_procs"] if sat else 0
+
+    def _slack_row(result: Optional[dict]) -> tuple[float, float]:
+        """Return (max_ok_intensity, slack_pct) for a slack result dict."""
+        if result is None:
+            return float("nan"), float("nan")
+        m    = result["slack_measurement"]
+        pct  = m["slack_tput"] / peak_tput if peak_tput > 0 else float("nan")
+        return m["intensity"], pct
+
+    cpu_slack, cpu_slack_pct = _slack_row(cpu_result)
+    io_slack,  io_slack_pct  = _slack_row(io_result)
+
+    with open(csv_path, "a") as f:
+        if write_header:
+            f.write("io_mix,intensity,saturation_n,"
+                    "cpu_slack,cpu_slack_pct,"
+                    "io_slack,io_slack_pct\n")
+        f.write(f"{args.io_mix},{args.intensity},{sat_n},"
+                f"{cpu_slack:.3f},{cpu_slack_pct:.4f},"
+                f"{io_slack:.3f},{io_slack_pct:.4f}\n")
+
+    print(f"[done] CSV     → {csv_path}")
 
 
 if __name__ == "__main__":
