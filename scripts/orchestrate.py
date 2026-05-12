@@ -593,11 +593,14 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Append one summary row to a CSV for later plotting.
     # Columns: io_mix, intensity, saturation_n,
-    #          cpu_slack, cpu_slack_pct, io_slack, io_slack_pct
+    #          cpu_slack_cores, cpu_slack_added_pct,
+    #          io_slack_cores,  io_slack_added_pct
     #
-    # *_slack      – max-ok intensity for that resource
-    # *_slack_pct  – slack workers' throughput at that point divided by
-    #                the saturation peak throughput (slack_xput / peak_xput)
+    # *_slack_cores     – effective slack capacity at the boundary:
+    #                     n_full + partial_intensity  (e.g. 2.73 cores)
+    # *_slack_added_pct – slack workers' throughput at that point divided
+    #                     by the saturation peak throughput
+    #                     (slack_xput / peak_xput)
     # ------------------------------------------------------------------
     csv_path = out_path.with_suffix(".csv")
     write_header = not csv_path.exists()
@@ -607,22 +610,33 @@ def main() -> None:
     peak_tput  = sat["peak_throughput"] if sat else 0.0
     sat_n      = sat["saturation_procs"] if sat else 0
 
-    def _slack_row(result: Optional[dict]) -> float:
+    def _slack_cores(result: Optional[dict]) -> float:
+        """Return n_full + partial_intensity for a slack result dict."""
+        if result is None:
+            return float("nan")
+        m = result["slack_measurement"]
+        return m["n_full"] + m["partial_intensity"]
+
+    def _slack_added_pct(result: Optional[dict]) -> float:
         """Return slack_tput / peak_tput for a slack result dict."""
         if result is None:
             return float("nan")
         m = result["slack_measurement"]
         return m["slack_tput"] / peak_tput if peak_tput > 0 else float("nan")
 
-    cpu_slack_pct = _slack_row(cpu_result)
-    io_slack_pct  = _slack_row(io_result)
+    cpu_cores         = _slack_cores(cpu_result)
+    io_cores          = _slack_cores(io_result)
+    cpu_slack_added_pct = _slack_added_pct(cpu_result)
+    io_slack_added_pct  = _slack_added_pct(io_result)
 
     with open(csv_path, "a") as f:
         if write_header:
             f.write("io_mix,intensity,saturation_n,"
-                    "cpu_slack_pct,io_slack_pct\n")
+                    "cpu_slack_cores,cpu_slack_added_pct,"
+                    "io_slack_cores,io_slack_added_pct\n")
         f.write(f"{args.io_mix},{args.intensity},{sat_n},"
-                f"{cpu_slack_pct:.4f},{io_slack_pct:.4f}\n")
+                f"{cpu_cores:.4f},{cpu_slack_added_pct:.4f},"
+                f"{io_cores:.4f},{io_slack_added_pct:.4f}\n")
 
     print(f"[done] CSV     → {csv_path}")
 
