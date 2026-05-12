@@ -286,12 +286,16 @@ def measure_slack(
 
     Algorithm
     ---------
-    For each additional slack-process count (1, 2, 3, …):
-      Binary-search intensity in [0.05, 1.0] to find the first intensity that
-      causes a drop.  If intensity=1.0 causes no drop, add another process.
+    Workers are added one at a time.  For each new worker, binary-search its
+    intensity in [0, 1.0] while all previously added workers remain locked at
+    intensity 1.0.  If a drop is found, the max-ok intensity (lo) is the
+    boundary.  If intensity=1.0 causes no drop, lock that worker at 1.0 and
+    binary-search the next one.
 
-    The slack measurement is (procs, intensity): the point at which
-    interference first appeared.
+    The result is (n_full, partial_intensity): n_full workers locked at 1.0,
+    plus one additional worker at partial_intensity.  For example, (2, 0.375)
+    means 2 full-speed slack workers and a third at 37.5% intensity can run
+    alongside the baseline without interference.
     """
     print(f"\n[slack-{slack_resource}]  baseline_procs={baseline_procs}"
           f"  baseline_tput={baseline_tput:.1f}")
@@ -303,25 +307,27 @@ def measure_slack(
 
     probe_index = 0
 
-    def probe(slack_n: int, slack_intensity: float,
-              ref_tput: float | None = None) -> tuple[bool, float]:
-        nonlocal probe_index
+    def run_batch(
+        slack_intensities: list[float],
+        ref_tput: float | None = None,
+    ) -> tuple[bool, float, float, float, float]:
         """
-        Spawn baseline and slack workers simultaneously in one batch, wait for
-        all to finish, then return (dropped, observed_type_matched_baseline_tput,
-        observed_type_matched_slack_tput).
+        Spawn N baseline workers and one slack worker per entry in
+        slack_intensities, all concurrently.  Returns:
+            (dropped, obs_cpu_tput, obs_io_tput, obs_total_tput, slack_tput)
 
-        Critically: all Popen() calls happen before any communicate(), so every
-        worker is running at the same time and competing for the same resources.
+        All Popen() calls happen before any communicate(), so every worker
+        runs at the same time and competes for the same resources.
 
         Drop detection uses the throughput dimension that matches slack_resource
         (cpu_throughput for CPU slack, io_throughput for I/O slack), so we only
         flag genuine contention on the resource under test.
 
-        ref_tput: reference throughput to compare against for drop detection.
-                  Should be the calibrated live reference for this slack_n round.
-                  Defaults to baseline_tput from saturation if not given.
+        ref_tput: live reference from calibrate().  Defaults to the saturation
+                  baseline_tput if not provided.
         """
+        nonlocal probe_index
+
         def make_cmd(io_mix: float, intensity: float, seed: int) -> list[str]:
             return [
                 str(WORKER_BIN),
@@ -332,11 +338,11 @@ def measure_slack(
                 "--seed",      str(seed),
             ]
 
-        # Launch all workers before waiting on any of them.
         base_seed_offset  = 100_000 + probe_index * 1000
         slack_seed_offset = 200_000 + probe_index * 1000
         probe_index += 1
 
+        # Launch all workers before waiting on any of them.
         base_procs_list = [
             subprocess.Popen(make_cmd(baseline_io_mix, baseline_intensity,
                                       base_seed + base_seed_offset + i),
@@ -344,13 +350,13 @@ def measure_slack(
             for i in range(baseline_procs)
         ]
         slack_procs_list = [
-            subprocess.Popen(make_cmd(slack_io_mix, slack_intensity,
+            subprocess.Popen(make_cmd(slack_io_mix, intensity,
                                       base_seed + slack_seed_offset + i),
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-            for i in range(slack_n)
+            for i, intensity in enumerate(slack_intensities)
         ]
 
-        # Now collect — workers are already running concurrently above.
+        # Collect — workers are already running concurrently above.
         base_results:  list[dict] = []
         slack_results: list[dict] = []
         for p in base_procs_list:
@@ -368,84 +374,72 @@ def measure_slack(
                 except json.JSONDecodeError:
                     pass
 
-        # Collect all throughput dimensions from baseline results.
         obs_cpu_tput   = total_cpu_throughput(base_results)
         obs_io_tput    = total_io_throughput(base_results)
         obs_total_tput = total_throughput(base_results)
         # Resource-matched throughput for primary drop detection.
         obs_resource   = tput_for_resource(base_results, slack_resource)
-        # When the baseline has zero resource-specific throughput (e.g. pure-CPU
-        # baseline has io_throughput=0) obs_resource is 0 and cannot be used for
-        # ratio comparison.  We still want to detect drops in that case via the
-        # total.  Use whichever gives a meaningful signal (non-zero).
+        # When the baseline has zero resource-specific throughput (e.g. a
+        # cpu-only baseline has io_throughput=0), fall back to total.
         obs_tput       = obs_resource if obs_resource > 0 else obs_total_tput
-        slack_tput     = total_throughput(slack_results)  # slack is pure resource, so total == resource tput
+        slack_tput     = total_throughput(slack_results)
         _ref           = ref_tput if ref_tput is not None else baseline_tput
         # DROP if EITHER the resource-matched OR the total baseline throughput
-        # drops by drop_pct.  This covers io_mix=0.0 (cpu-only baseline: no I/O
-        # tput to match) and io_mix=1.0 (io-only baseline: no CPU tput to match)
-        # without needing a special-case branch.
+        # drops by drop_pct.  Covers pure-CPU and pure-I/O baselines without
+        # a special-case branch.
         drop_resource = (_ref - obs_tput)       / max(_ref, 1.0) >= drop_pct
         drop_total    = (_ref - obs_total_tput) / max(_ref, 1.0) >= drop_pct
         dropped = drop_resource or drop_total
         return dropped, obs_cpu_tput, obs_io_tput, obs_total_tput, slack_tput
 
-    def calibrate(slack_n: int) -> float:
+    def calibrate(n_full: int) -> float:
         """
-        Measure the current resource-matched baseline throughput with slack_n
-        workers fully sleeping (intensity=0).  This accounts for:
-          - natural throughput drift since the saturation measurement
-          - OS scheduling overhead of having extra processes in the table
-        All subsequent probes for this slack_n round compare against this
-        live reference, so only active resource contention triggers a drop.
-        The reference uses the same resource-matched throughput dimension as
-        drop detection (cpu_throughput for CPU slack, io_throughput for I/O
-        slack) so the comparison is always apples-to-apples.
+        Measure the live baseline throughput with all slack workers sleeping
+        (n_full locked workers + 1 new worker, all at intensity=0).  This
+        accounts for throughput drift and OS scheduling overhead of the extra
+        processes.  All subsequent probes this round compare against this
+        reference so only genuine resource contention triggers a drop.
         """
-        print(f"[slack-{slack_resource}]  calibrating with {slack_n} sleeping proc(s)...",
+        total_sleeping = n_full + 1
+        print(f"[slack-{slack_resource}]  calibrating with {total_sleeping} sleeping proc(s)...",
               end=" ", flush=True)
-        # intensity=0 → all slack workers sleep; use total tput as live reference
-        _, cpu_t, io_t, total_t, _ = probe(slack_n, 0.0)
-        # For calibration, use resource-matched tput when non-zero, else total.
+        _, cpu_t, io_t, total_t, _ = run_batch([0.0] * total_sleeping)
         obs_resource = cpu_t if slack_resource == "cpu" else io_t
         tput = obs_resource if obs_resource > 0 else total_t
         print(f"current baseline_{slack_resource}_tput = {tput:.1f} ops/s")
         return tput
 
-    slack_procs:     int   = 1
-    slack_intensity: float = 1.0
-    lo_slack_tput:   float = 0.0   # slack throughput at the max-ok intensity point
-    found: bool            = False
-    MAX_SLACK_PROCS        = 16
+    n_full:            int   = 0
+    partial_intensity: float = 0.0
+    lo_slack_tput:     float = 0.0
+    found:             bool  = False
+    MAX_SLACK_PROCS          = 16
 
-    while slack_procs <= MAX_SLACK_PROCS:
-        print(f"[slack-{slack_resource}]  sweeping intensity with {slack_procs} extra proc(s)")
+    while n_full < MAX_SLACK_PROCS:
+        print(f"[slack-{slack_resource}]  binary-searching worker #{n_full + 1}"
+              f"  ({n_full} locked at 1.0)")
 
-        # Calibrate: fresh baseline with these slack workers sleeping.
-        # All probes this round compare against this reference, not the stale
-        # saturation measurement, eliminating false drops from drift/overhead.
-        ref = calibrate(slack_procs)
+        # Calibrate: fresh reference with all slack workers sleeping this round.
+        ref = calibrate(n_full)
 
-        # Start the binary search above the previously confirmed safe load.
-        # We know (slack_procs-1) procs at intensity=1.0 caused no drop, so
-        # set lo = (N-1)/N so that N*lo equals that confirmed-safe total load.
-        lo        = (slack_procs - 1) / slack_procs
+        lo        = 0.0
         hi        = 1.0
         drop_seen = False
 
         # ~6 bisections → precision ≈ 0.015
         for step in range(6):
             mid = (lo + hi) / 2.0
-            dropped, obs_cpu, obs_io, obs_total, slack_obs = probe(slack_procs, mid, ref_tput=ref)
+            # n_full workers locked at 1.0, one new worker at mid.
+            dropped, obs_cpu, obs_io, obs_total, slack_obs = run_batch(
+                [1.0] * n_full + [mid], ref_tput=ref
+            )
             tag = "DROP" if dropped else "ok"
-            obs_resource_tput = obs_cpu if slack_resource == "cpu" else obs_io
-            obs_display = obs_resource_tput if obs_resource_tput > 0 else obs_total
-            print(f"[slack-{slack_resource}]    intensity={mid:.3f}"
+            print(f"[slack-{slack_resource}]    n_full={n_full}  partial={mid:.3f}"
                   f"  baseline_cpu={obs_cpu:.1f}  baseline_io={obs_io:.1f}"
                   f"  slack_tput={slack_obs:.1f}  [{tag}]")
             data_points.append({
-                "slack_procs":        slack_procs,
-                "slack_intensity":    mid,
+                "n_full":            n_full,
+                "partial_intensity": mid,
                 "baseline_cpu_tput": obs_cpu,
                 "baseline_io_tput":  obs_io,
                 "baseline_tput":     obs_total,
@@ -458,19 +452,22 @@ def measure_slack(
                 drop_seen = True
             else:
                 lo            = mid
-                lo_slack_tput = slack_obs   # track throughput at highest ok point
+                lo_slack_tput = slack_obs
 
         if drop_seen:
-            # Report the maximum ok point (lo), not the first drop point (hi).
-            slack_intensity = lo
+            # lo is the highest intensity that caused no drop.
+            partial_intensity = lo
             found = True
             break
 
-        # No drop even at intensity=1 — check explicitly before adding a process
-        dropped_max, obs_cpu_max, obs_io_max, obs_total_max, slack_obs_max = probe(slack_procs, 1.0, ref_tput=ref)
+        # Bisection found no drop — check intensity=1.0 explicitly before
+        # deciding to lock this worker and move on.
+        dropped_max, obs_cpu_max, obs_io_max, obs_total_max, slack_obs_max = run_batch(
+            [1.0] * n_full + [1.0], ref_tput=ref
+        )
         data_points.append({
-            "slack_procs":        slack_procs,
-            "slack_intensity":    1.0,
+            "n_full":            n_full,
+            "partial_intensity": 1.0,
             "baseline_cpu_tput": obs_cpu_max,
             "baseline_io_tput":  obs_io_max,
             "baseline_tput":     obs_total_max,
@@ -479,28 +476,30 @@ def measure_slack(
             "dropped":           dropped_max,
         })
         if dropped_max:
-            # Bisection found no drop; 1.0 drops — max ok point is lo from bisection.
-            slack_intensity = lo
+            # 1.0 drops but bisection didn't catch it — lo is the max-ok point.
+            partial_intensity = lo
             found = True
             break
 
-        # intensity=1.0 is also safe: record it and add another process.
+        # intensity=1.0 is safe: lock this worker and search the next one.
         lo_slack_tput = slack_obs_max
-        print(f"[slack-{slack_resource}]  no drop at intensity=1.0; adding another process")
-        slack_procs += 1
+        print(f"[slack-{slack_resource}]  worker #{n_full + 1} locked at 1.0;"
+              f" searching worker #{n_full + 2}")
+        n_full += 1
 
     if not found:
-        print(f"[slack-{slack_resource}]  WARNING: slack boundary not found within {MAX_SLACK_PROCS} processes")
+        print(f"[slack-{slack_resource}]  WARNING: slack boundary not found"
+              f" within {MAX_SLACK_PROCS} processes")
 
-    print(f"[slack-{slack_resource}]  result = ({slack_procs}, {slack_intensity:.3f})  [max-ok]")
+    print(f"[slack-{slack_resource}]  result = ({n_full} full, {partial_intensity:.3f} partial)")
 
     return {
         "type":              "slack",
         "resource":          slack_resource,
         "slack_measurement": {
-            "procs":      slack_procs,
-            "intensity":  slack_intensity,
-            "slack_tput": lo_slack_tput,
+            "n_full":            n_full,
+            "partial_intensity": partial_intensity,
+            "slack_tput":        lo_slack_tput,
         },
         "data_points":       data_points,
     }
@@ -608,25 +607,22 @@ def main() -> None:
     peak_tput  = sat["peak_throughput"] if sat else 0.0
     sat_n      = sat["saturation_procs"] if sat else 0
 
-    def _slack_row(result: Optional[dict]) -> tuple[float, float]:
-        """Return (max_ok_intensity, slack_pct) for a slack result dict."""
+    def _slack_row(result: Optional[dict]) -> float:
+        """Return slack_tput / peak_tput for a slack result dict."""
         if result is None:
-            return float("nan"), float("nan")
-        m    = result["slack_measurement"]
-        pct  = m["slack_tput"] / peak_tput if peak_tput > 0 else float("nan")
-        return m["intensity"], pct
+            return float("nan")
+        m = result["slack_measurement"]
+        return m["slack_tput"] / peak_tput if peak_tput > 0 else float("nan")
 
-    cpu_slack, cpu_slack_pct = _slack_row(cpu_result)
-    io_slack,  io_slack_pct  = _slack_row(io_result)
+    cpu_slack_pct = _slack_row(cpu_result)
+    io_slack_pct  = _slack_row(io_result)
 
     with open(csv_path, "a") as f:
         if write_header:
             f.write("io_mix,intensity,saturation_n,"
-                    "cpu_slack,cpu_slack_pct,"
-                    "io_slack,io_slack_pct\n")
+                    "cpu_slack_pct,io_slack_pct\n")
         f.write(f"{args.io_mix},{args.intensity},{sat_n},"
-                f"{cpu_slack:.3f},{cpu_slack_pct:.4f},"
-                f"{io_slack:.3f},{io_slack_pct:.4f}\n")
+                f"{cpu_slack_pct:.4f},{io_slack_pct:.4f}\n")
 
     print(f"[done] CSV     → {csv_path}")
 
