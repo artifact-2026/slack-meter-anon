@@ -147,7 +147,7 @@ def run_saturation(
     tmp_dir: str               = DEFAULT_TMP,
     base_seed: int             = 42,
     sat_epsilon: float         = 1.02,
-    marginal_threshold: float  = 0.05,
+    marginal_threshold: float  = 0.025,
     min_consecutive_small: int = 1,
 ) -> dict:
     """
@@ -192,7 +192,7 @@ def run_saturation(
     """
     print(f"\n[saturation] io_mix={io_mix}  intensity={intensity}"
           f"  max_procs={max_procs}  min_procs={min_procs}"
-          f"  marginal_threshold={marginal_threshold:.0%}  sat_epsilon={sat_epsilon}")
+          f"  marginal_threshold={marginal_threshold:.0%}")
     Path(tmp_dir).mkdir(parents=True, exist_ok=True)
 
     data_points: list[dict]         = []
@@ -200,7 +200,6 @@ def run_saturation(
     peak_procs:  int                = 1
     prev_tput:   float              = 0.0
     consecutive_non_increasing: int = 0
-    consecutive_small_gains:    int = 0
 
     for n in range(1, max_procs + 1):
         print(f"[saturation]  n={n} ...", end=" ", flush=True)
@@ -213,38 +212,26 @@ def run_saturation(
         tput = total_throughput(results)
         data_points.append({"n_procs": n, "throughput": tput})
 
-        # --- condition 1: diminishing returns (step-to-step relative gain) ---
         if prev_tput > 0:
             rel_gain = (tput - prev_tput) / prev_tput
             if rel_gain < marginal_threshold:
-                consecutive_small_gains += 1
+                consecutive_non_increasing += 1
             else:
-                consecutive_small_gains = 0
+                peak_tput  = tput
+                peak_procs = n
+                consecutive_non_increasing = 0
         else:
             rel_gain = float("inf")
 
-        # --- condition 2: post-peak plateau (absolute comparison to peak) ---
-        if tput > sat_epsilon * peak_tput:
-            peak_tput  = tput
-            peak_procs = n
-            consecutive_non_increasing = 0
-        else:
-            consecutive_non_increasing += 1
-
         print(f"throughput={tput:.1f} ops/s  rel_gain={rel_gain:+.1%}"
-              f"  small={consecutive_small_gains}  non-incr={consecutive_non_increasing}")
+              f"  non-incr={consecutive_non_increasing}")
 
         prev_tput = tput
 
-        if n >= min_procs:
-            if consecutive_small_gains >= min_consecutive_small:
-                print(f"[saturation] >> saturated (diminishing returns) at"
-                      f" n={peak_procs}  peak={peak_tput:.1f} ops/s")
-                break
-            if consecutive_non_increasing >= 2:
-                print(f"[saturation] >> saturated (post-peak plateau) at"
-                      f" n={peak_procs}  peak={peak_tput:.1f} ops/s")
-                break
+        if consecutive_non_increasing >= 2:
+            print(f"[saturation] >> saturated (post-peak plateau) at"
+                    f" n={peak_procs}  peak={peak_tput:.1f} ops/s")
+            break
 
     return {
         "type":                "saturation",
@@ -525,7 +512,7 @@ def main() -> None:
                         help="Fraction of baseline throughput drop to count as interference")
     parser.add_argument("--sat-epsilon", type=float, default=1.02, metavar="F",
                         help="Min improvement ratio to count as progress (>1.0; default 1.02 → 1%% margin)")
-    parser.add_argument("--marginal-threshold", type=float, default=0.05, metavar="F",
+    parser.add_argument("--marginal-threshold", type=float, default=0.025, metavar="F",
                         help="Step-to-step relative gain below which a step counts as 'small' (default 0.05 → 5%%)")
     parser.add_argument("--min-consecutive-small", type=int, default=1, metavar="N",
                         help="Consecutive small-gain steps required to declare saturation (default 1; use 2 for noise tolerance)")
