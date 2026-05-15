@@ -57,8 +57,12 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size) {
 
   // Aligned buffer required by O_DIRECT.
   if (posix_memalign(&st.buf, IO_BUF_SIZE, IO_BUF_SIZE) != 0)
-    return st;  // buf stays nullptr; caller checks fd < 0
-  memset(st.buf, 0xAB, IO_BUF_SIZE);
+    return st; // buf stays nullptr; caller checks fd < 0
+  std::mt19937_64 init_rng(1337 + getpid());
+  uint64_t *buf_ptr = static_cast<uint64_t *>(st.buf);
+  for (size_t i = 0; i < IO_BUF_SIZE / sizeof(uint64_t); ++i) {
+    buf_ptr[i] = init_rng();
+  }
 
   st.fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0600);
   if (st.fd < 0) {
@@ -81,7 +85,7 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size) {
     }
   }
 
-  st.file_size  = file_size;
+  st.file_size = file_size;
   st.num_blocks = file_size / IO_BUF_SIZE;
   return st;
 }
@@ -95,7 +99,16 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size) {
 // if multiple threads ever shared the same fd).
 // ----------------------------------------------------------------------------
 void do_io_work(IoState &st, std::mt19937_64 &rng) {
-  if (st.fd < 0 || !st.buf) return;
+  if (st.fd < 0 || !st.buf)
+    return;
+
+  // Mutate one 8-byte word per 512-byte sector to defeat both block-level
+  // deduplication and any aggressive sub-block / sector-level deduplication.
+  // The cost of 8 fast RNG calls (~16ns) is invisible next to the I/O latency.
+  uint64_t *buf_ptr = static_cast<uint64_t *>(st.buf);
+  for (int i = 0; i < 8; ++i) {
+    buf_ptr[i * (512 / sizeof(uint64_t))] = rng();
+  }
 
   // Random 4 KiB-aligned offset within the pre-allocated file.
   const off_t offset = (off_t)((rng() % st.num_blocks) * IO_BUF_SIZE);
