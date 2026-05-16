@@ -33,8 +33,8 @@ log() { echo "[run] $*"; }
 
 # ---------------------------------------------------------------------------
 log "Building slack-meter..."
-cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -S "$REPO" -q
-cmake --build "$BUILD" --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu)" -q
+cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -S "$REPO"
+cmake --build "$BUILD" --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
 
 # ---------------------------------------------------------------------------
 log "Running experiment (mode=$MODE  duration=${DURATION}s  max_procs=$MAX_PROCS  min_procs=$MIN_PROCS  io_mix=$IO_MIX  intensity=$INTENSITY  drop_pct=$DROP_PCT)..."
