@@ -31,5 +31,6 @@ services:
     volumes:
       - ../results:/app/results
       - /holly/scratch:/holly/scratch
+      - /holly/slack-meter-calibrate:/holly/slack-meter-calibrate
     command: >
       --mode       ${MODE:-full} --duration   ${DURATION:-30} --max-procs  ${MAX_PROCS:-32} --min-procs  ${MIN_PROCS:-10} --io-mix     ${IO_MIX:-0.3} --intensity  ${INTENSITY:-0.75} --drop-pct   ${DROP_PCT:-0.05} --tmp-dir    /holly/scratch --output     results/experiment.json
