@@ -70,7 +70,7 @@ IO_MIX="${IO_MIX:-0.3}"
 INTENSITY="${INTENSITY:-0.75}"
 DROP_PCT="${DROP_PCT:-0.05}"
 SAT_EPSILON="${SAT_EPSILON:-1.02}"
-TMP_DIR="${TMP_DIR:-/tmp/slack-meter}"
+TMP_DIR="${TMP_DIR:-/holly/slack-meter-loaded-sweep}"
 INTERVAL="${INTERVAL:-1}"
 SEED="${SEED:-42}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO/results/loaded_sweep}"
@@ -141,25 +141,30 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ---------------------------------------------------------------------------
-# Start background workers
+# For SWEEP=slack: start always-on background workers (they provide the
+# constant load signal that orchestrate.py probes on top of).
+#
+# For SWEEP=io: sweep_io_loaded.py manages its own per-probe background
+# workers so it can measure their throughput and detect interference.
+# Always-on workers are not needed — the per-probe workers appear in the
+# iostat/vmstat time series just as well.
 # ---------------------------------------------------------------------------
-log "Starting $BG_PROCS background worker(s)  io_mix=$BG_IO_MIX  intensity=$BG_INTENSITY"
-
-for i in $(seq 1 "$BG_PROCS"); do
-    "$WORKER" \
-        --io-mix    "$BG_IO_MIX"    \
-        --intensity "$BG_INTENSITY" \
-        --duration  "$BG_DURATION"  \
-        --tmp-dir   "$TMP_DIR"      \
-        --seed      $((SEED + i))   \
-        > "$OUTPUT_DIR/bg_worker_${i}.json" &
-    BG_PIDS+=($!)
-done
-log "Background worker PIDs: ${BG_PIDS[*]}"
-
-# Brief settle time so background workers are generating load before the
-# sweep starts and the collectors see a non-trivial baseline.
-sleep 2
+if [[ "$SWEEP" == "slack" ]]; then
+    log "Starting $BG_PROCS background worker(s)  io_mix=$BG_IO_MIX  intensity=$BG_INTENSITY"
+    for i in $(seq 1 "$BG_PROCS"); do
+        "$WORKER" \
+            --io-mix    "$BG_IO_MIX"    \
+            --intensity "$BG_INTENSITY" \
+            --duration  "$BG_DURATION"  \
+            --tmp-dir   "$TMP_DIR"      \
+            --seed      $((SEED + i))   \
+            > "$OUTPUT_DIR/bg_worker_${i}.json" &
+        BG_PIDS+=($!)
+    done
+    log "Background worker PIDs: ${BG_PIDS[*]}"
+    # Settle so background workers are generating load before the sweep starts
+    sleep 2
+fi
 
 # ---------------------------------------------------------------------------
 # Start collectors (no sample-count limit — run until killed)
@@ -182,17 +187,21 @@ IOSTAT_PID=$!
 # ---------------------------------------------------------------------------
 # Run sweep
 # ---------------------------------------------------------------------------
-log "  (background workers remain running throughout)"
-
 if [[ "$SWEEP" == "io" ]]; then
-    log "Starting I/O calibration sweep (calibrate_io.py)  duration=${DURATION}s"
-    python3 "$REPO/scripts/calibrate_io.py" \
-        --duration   "$DURATION"                   \
-        --tmp-dir    "$TMP_DIR"                    \
-        --worker-bin "$BUILD/worker"               \
-        --output     "$OUTPUT_DIR/calibrate_io.json"
+    log "Starting I/O sweep under load (sweep_io_loaded.py)"
+    log "  bg: $BG_PROCS workers  io_mix=$BG_IO_MIX  intensity=$BG_INTENSITY  duration=${DURATION}s"
+    python3 "$REPO/scripts/sweep_io_loaded.py" \
+        --bg-procs     "$BG_PROCS"       \
+        --bg-io-mix    "$BG_IO_MIX"      \
+        --bg-intensity "$BG_INTENSITY"   \
+        --duration     "$DURATION"       \
+        --drop-pct     "$DROP_PCT"       \
+        --tmp-dir      "$TMP_DIR"        \
+        --worker-bin   "$BUILD/worker"   \
+        --output       "$OUTPUT_DIR/sweep_io.json"
 else
     log "Starting slack sweep (orchestrate.py)  mode=$MODE  duration=${DURATION}s  max_procs=$MAX_PROCS"
+    log "  (background workers remain running throughout)"
     python3 "$REPO/scripts/orchestrate.py" \
         --mode          "$MODE"        \
         --duration      "$DURATION"    \
@@ -253,7 +262,7 @@ fi
 
 log "Done!"
 if [[ "$SWEEP" == "io" ]]; then
-    log "  I/O calibration  : $OUTPUT_DIR/calibrate_io.json"
+    log "  I/O sweep result : $OUTPUT_DIR/sweep_io.json"
 else
     log "  Experiment JSON  : $OUTPUT_DIR/experiment.json"
     log "  Sweep report     : $OUTPUT_DIR/report.html"
