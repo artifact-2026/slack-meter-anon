@@ -3,15 +3,18 @@
 # ===================
 # Runs N "always-on" background workers throughout the experiment (providing a
 # constant utilization signal in iostat/vmstat), while simultaneously running
-# a slack measurement sweep via orchestrate.py.
+# a sweep to probe remaining capacity.
 #
 # The goal is to contrast two views of the same system:
 #   - Utilization (iostat/vmstat): what fraction of CPU/I/O is consumed
-#   - Slack estimate (sweep):      how much additional load can be added before
-#                                  the baseline throughput actually degrades
+#   - Sweep result:                how much additional load can actually be added
+#
+# SWEEP selects which sweep to run alongside the background workers:
+#   SWEEP=io    → calibrate_io.py: sweeps pure-I/O workers to find T_io
+#   SWEEP=slack → orchestrate.py:  saturation + slack measurement (default)
 #
 # Background workers are started with a long timeout and killed when the sweep
-# finishes; orchestrate.py runs its own workers on top of them as usual.
+# finishes.
 #
 # Optional environment variables:
 #
@@ -21,8 +24,16 @@
 #   BG_IO_MIX=<float>    background io_mix  (default: IO_MIX)
 #   BG_INTENSITY=<float> background intensity (default: INTENSITY)
 #
-#   Sweep (forwarded to orchestrate.py)
-#   ------------------------------------
+#   Sweep selector
+#   --------------
+#   SWEEP=<io|slack>     which sweep to run                         (default: slack)
+#
+#   Sweep — io (calibrate_io.py)
+#   ----------------------------
+#   DURATION=<secs>      seconds per I/O probe                      (default: 30)
+#
+#   Sweep — slack (orchestrate.py)
+#   ------------------------------
 #   MODE=<mode>          saturation | slack-cpu | slack-io | full   (default: full)
 #   DURATION=<secs>      seconds per worker probe                   (default: 30)
 #   MAX_PROCS=<n>        max processes in saturation sweep          (default: 32)
@@ -47,6 +58,9 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$REPO/build"
 WORKER="$BUILD/worker"
 
+# Sweep selector
+SWEEP="${SWEEP:-slack}"
+
 # Sweep / shared params
 MODE="${MODE:-full}"
 DURATION="${DURATION:-30}"
@@ -56,7 +70,7 @@ IO_MIX="${IO_MIX:-0.3}"
 INTENSITY="${INTENSITY:-0.75}"
 DROP_PCT="${DROP_PCT:-0.05}"
 SAT_EPSILON="${SAT_EPSILON:-1.02}"
-TMP_DIR="${TMP_DIR:-/holly/slack-meter-loaded-sweep}"
+TMP_DIR="${TMP_DIR:-/tmp/slack-meter}"
 INTERVAL="${INTERVAL:-1}"
 SEED="${SEED:-42}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO/results/loaded_sweep}"
@@ -71,6 +85,11 @@ BG_INTENSITY="${BG_INTENSITY:-$INTENSITY}"
 BG_DURATION=86400   # 24 h ceiling; always killed before expiry
 
 log() { echo "[loaded-sweep] $*"; }
+
+case "$SWEEP" in
+    io|slack) ;;
+    *) echo "[loaded-sweep] ERROR: SWEEP must be 'io' or 'slack' (got '$SWEEP')" >&2; exit 1 ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Build
@@ -163,21 +182,30 @@ IOSTAT_PID=$!
 # ---------------------------------------------------------------------------
 # Run sweep
 # ---------------------------------------------------------------------------
-log "Starting sweep: mode=$MODE  duration=${DURATION}s  max_procs=$MAX_PROCS"
 log "  (background workers remain running throughout)"
 
-python3 "$REPO/scripts/orchestrate.py" \
-    --mode          "$MODE"        \
-    --duration      "$DURATION"    \
-    --max-procs     "$MAX_PROCS"   \
-    --min-procs     "$MIN_PROCS"   \
-    --io-mix        "$IO_MIX"      \
-    --intensity     "$INTENSITY"   \
-    --drop-pct      "$DROP_PCT"    \
-    --sat-epsilon   "$SAT_EPSILON" \
-    --tmp-dir       "$TMP_DIR"     \
-    --seed          $((SEED + BG_PROCS + 1)) \
-    --output        "$OUTPUT_DIR/experiment.json"
+if [[ "$SWEEP" == "io" ]]; then
+    log "Starting I/O calibration sweep (calibrate_io.py)  duration=${DURATION}s"
+    python3 "$REPO/scripts/calibrate_io.py" \
+        --duration   "$DURATION"                   \
+        --tmp-dir    "$TMP_DIR"                    \
+        --worker-bin "$BUILD/worker"               \
+        --output     "$OUTPUT_DIR/calibrate_io.json"
+else
+    log "Starting slack sweep (orchestrate.py)  mode=$MODE  duration=${DURATION}s  max_procs=$MAX_PROCS"
+    python3 "$REPO/scripts/orchestrate.py" \
+        --mode          "$MODE"        \
+        --duration      "$DURATION"    \
+        --max-procs     "$MAX_PROCS"   \
+        --min-procs     "$MIN_PROCS"   \
+        --io-mix        "$IO_MIX"      \
+        --intensity     "$INTENSITY"   \
+        --drop-pct      "$DROP_PCT"    \
+        --sat-epsilon   "$SAT_EPSILON" \
+        --tmp-dir       "$TMP_DIR"     \
+        --seed          $((SEED + BG_PROCS + 1)) \
+        --output        "$OUTPUT_DIR/experiment.json"
+fi
 
 # ---------------------------------------------------------------------------
 # Stop background workers and collectors
@@ -213,7 +241,7 @@ python3 "$REPO/scripts/plot_timeseries.py" \
     --intensity  "$BG_INTENSITY"
 
 # ---------------------------------------------------------------------------
-# Sweep summary report
+# Sweep summary report (slack sweep only)
 # ---------------------------------------------------------------------------
 if [[ -f "$OUTPUT_DIR/experiment.json" ]]; then
     log "Generating sweep report..."
@@ -224,6 +252,12 @@ if [[ -f "$OUTPUT_DIR/experiment.json" ]]; then
 fi
 
 log "Done!"
+if [[ "$SWEEP" == "io" ]]; then
+    log "  I/O calibration  : $OUTPUT_DIR/calibrate_io.json"
+else
+    log "  Experiment JSON  : $OUTPUT_DIR/experiment.json"
+    log "  Sweep report     : $OUTPUT_DIR/report.html"
+fi
 log "  Time-series plot : $OUTPUT_DIR/timeseries.png"
 log "  Sweep report     : $OUTPUT_DIR/report.html"
 log "  Experiment JSON  : $OUTPUT_DIR/experiment.json"
