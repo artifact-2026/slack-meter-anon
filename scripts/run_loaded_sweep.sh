@@ -198,7 +198,8 @@ if [[ "$SWEEP" == "io" ]]; then
         --drop-pct     "$DROP_PCT"       \
         --tmp-dir      "$TMP_DIR"        \
         --worker-bin   "$BUILD/worker"   \
-        --output       "$OUTPUT_DIR/sweep_io.json"
+        --output       "$OUTPUT_DIR/sweep_io.json" \
+        --plot         "$OUTPUT_DIR/slack_result.png"
 else
     log "Starting slack sweep (orchestrate.py)  mode=$MODE  duration=${DURATION}s  max_procs=$MAX_PROCS"
     log "  (background workers remain running throughout)"
@@ -263,6 +264,7 @@ fi
 log "Done!"
 if [[ "$SWEEP" == "io" ]]; then
     log "  I/O sweep result : $OUTPUT_DIR/sweep_io.json"
+    log "  Slack figure     : $OUTPUT_DIR/slack_result.png"
 else
     log "  Experiment JSON  : $OUTPUT_DIR/experiment.json"
     log "  Sweep report     : $OUTPUT_DIR/report.html"

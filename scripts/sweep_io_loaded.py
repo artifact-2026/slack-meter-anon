@@ -5,30 +5,18 @@ sweep_io_loaded.py
 Sweeps pure I/O workers on top of a background workload, stopping when the
 BACKGROUND throughput drops by DROP_PCT — not when I/O throughput plateaus.
 
-This is the correct stopping condition for run_loaded_sweep.sh SWEEP=io:
-
-  calibrate_io.py  → stops when I/O throughput stops growing
-  sweep_io_loaded  → stops when background workers are being interfered with
-
 Methodology
 -----------
-Phase 0  Baseline: run BG_PROCS background workers alone for DURATION seconds.
-         Record their throughput as the reference (baseline_tput).
+Phase 0  Baseline: run BG_PROCS background workers alone. Record throughput.
 
 Phase 1  Linear sweep: add one full-intensity (io_mix=1, intensity=1) I/O
-         worker per round.  Each round runs all background + all current I/O
-         workers together for DURATION seconds.  Stop as soon as background
-         throughput drops by >= DROP_PCT relative to baseline, or when the
-         background recovers after a brief overshoot (see below), or when
-         MAX_IO_PROCS is reached.
+         worker per round; stop when background throughput drops >= DROP_PCT.
 
-Phase 2  Binary search: with (n_full_io - 1) locked at intensity=1.0, search
-         for the highest fractional intensity on the last I/O worker that still
-         leaves background throughput undisturbed.
+Phase 2  Binary search: lock (n_full-1) I/O workers at intensity=1.0, find
+         the highest fractional intensity on the last one that leaves
+         background throughput undisturbed.
 
-Result is reported as (n_full, partial_intensity): n_full I/O workers at
-intensity=1.0 plus one more at partial_intensity can run without affecting
-the background workload.
+All throughputs are reported in kTokens (1 ops/s = 1 token = 0.001 kTokens).
 
 Usage
 -----
@@ -36,7 +24,8 @@ Usage
         --bg-procs 8 --bg-io-mix 0.5 --bg-intensity 0.9 \\
         --duration 30 --drop-pct 0.05 \\
         --tmp-dir /tmp/slack-meter \\
-        --output results/loaded_sweep/sweep_io.json
+        --output results/loaded_sweep/sweep_io.json \\
+        --plot   results/loaded_sweep/slack_result.png
 """
 
 from __future__ import annotations
@@ -47,17 +36,19 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 REPO_ROOT  = Path(__file__).parent.parent.resolve()
 WORKER_BIN = str(REPO_ROOT / "build" / "worker")
 
-# Seeds: background workers get 1000+i, I/O sweep workers get 2000+i
 _BG_SEED_BASE = 1000
 _IO_SEED_BASE = 2000
 
+_KT = 1e-3   # ops/s → kTokens
+
 
 # ---------------------------------------------------------------------------
-# Core probe: run background + I/O workers concurrently, return throughputs
+# Core probe
 # ---------------------------------------------------------------------------
 
 def run_probe(
@@ -70,36 +61,26 @@ def run_probe(
     tmp_dir:      str,
     worker_bin:   str,
 ) -> tuple[float, float]:
-    """
-    Spawn bg_procs background workers and n_io pure-I/O workers simultaneously.
-    Wait for all, then return (bg_throughput, io_throughput).
-    """
+    """Run bg + I/O workers concurrently; return (bg_tput, io_tput) in ops/s."""
     def make_cmd(io_mix: float, intensity: float, seed: int) -> list[str]:
-        return [
-            worker_bin,
-            "--io-mix",    str(io_mix),
-            "--intensity", str(intensity),
-            "--duration",  str(duration),
-            "--tmp-dir",   tmp_dir,
-            "--seed",      str(seed),
-        ]
+        return [worker_bin,
+                "--io-mix",    str(io_mix),
+                "--intensity", str(intensity),
+                "--duration",  str(duration),
+                "--tmp-dir",   tmp_dir,
+                "--seed",      str(seed)]
 
     procs: list[subprocess.Popen] = []
-
     for i in range(bg_procs):
         procs.append(subprocess.Popen(
             make_cmd(bg_io_mix, bg_intensity, _BG_SEED_BASE + i),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        ))
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
     for i in range(n_io):
         procs.append(subprocess.Popen(
             make_cmd(1.0, io_intensity, _IO_SEED_BASE + i),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        ))
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
 
-    bg_tput = 0.0
-    io_tput = 0.0
-
+    bg_tput = io_tput = 0.0
     for idx, p in enumerate(procs):
         stdout, _ = p.communicate()
         if p.returncode != 0:
@@ -118,7 +99,7 @@ def run_probe(
 
 
 # ---------------------------------------------------------------------------
-# Main sweep logic
+# Main sweep
 # ---------------------------------------------------------------------------
 
 def sweep(
@@ -133,77 +114,225 @@ def sweep(
     binary_steps: int   = 5,
 ) -> dict:
     os.makedirs(tmp_dir, exist_ok=True)
-
     kw = dict(bg_procs=bg_procs, bg_io_mix=bg_io_mix, bg_intensity=bg_intensity,
               duration=duration, tmp_dir=tmp_dir, worker_bin=worker_bin)
 
     # ------------------------------------------------------------------
-    # Phase 0: baseline (no I/O sweep workers)
+    # Phase 0: baseline
     # ------------------------------------------------------------------
     print("--- Phase 0: Baseline (background workers only) ---")
     baseline_tput, _ = run_probe(n_io=0, io_intensity=0.0, **kw)
     threshold = baseline_tput * (1.0 - drop_pct)
-    print(f"  Baseline bg throughput : {baseline_tput:,.0f} ops/s")
-    print(f"  Interference threshold : {threshold:,.0f} ops/s  (drop >= {drop_pct*100:.0f}%)")
+    print(f"  Baseline bg : {baseline_tput*_KT:,.3f} kTokens/s")
+    print(f"  Threshold   : {threshold*_KT:,.3f} kTokens/s  (drop >= {drop_pct*100:.0f}%)")
 
     # ------------------------------------------------------------------
-    # Phase 1: linear sweep of full-intensity I/O workers
+    # Phase 1: linear sweep
     # ------------------------------------------------------------------
-    print("\n--- Phase 1: Linear I/O sweep (stopping on background interference) ---")
-    n_full = 0   # number of full-intensity I/O workers that are safe
+    print("\n--- Phase 1: Linear I/O sweep ---")
+    print(f"  {'IO wkrs':>7}  {'bg (kT/s)':>12}  {'io (kT/s)':>12}  {'status':}")
+    print(f"  {'-------':>7}  {'---------':>12}  {'---------':>12}")
+
+    phase1: list[dict] = []
+    n_full = 0
 
     for n_io in range(1, max_io_procs + 1):
         bg_tput, io_tput = run_probe(n_io=n_io, io_intensity=1.0, **kw)
         interfered = bg_tput < threshold
-        flag = "  <-- INTERFERENCE" if interfered else ""
-        print(f"  IO workers={n_io:3d}  bg={bg_tput:>10,.0f} ops/s  io={io_tput:>10,.0f} ops/s{flag}")
-
+        status = "INTERFERENCE" if interfered else "ok"
+        print(f"  {n_io:>7d}  {bg_tput*_KT:>12.3f}  {io_tput*_KT:>12.3f}  {status}")
+        phase1.append(dict(n_io=n_io, bg_ktokens=bg_tput*_KT, io_ktokens=io_tput*_KT,
+                           interfered=interfered))
         if interfered:
-            # n_io workers is too many; n_io-1 were safe
             n_full = n_io - 1
             break
-        n_full = n_io   # still safe, keep going
+        n_full = n_io
     else:
         print(f"\n  Reached max_io_procs={max_io_procs} without interference.")
 
     # ------------------------------------------------------------------
     # Phase 2: binary search on fractional last worker
     # ------------------------------------------------------------------
-    print(f"\n--- Phase 2: Binary search on fractional I/O worker "
-          f"(locked: {n_full} × intensity=1.0) ---")
+    print(f"\n--- Phase 2: Binary search  (locked: {n_full} × intensity=1.0) ---")
+    print(f"  {'step':>4}  {'intensity':>9}  {'bg (kT/s)':>12}  {'io (kT/s)':>12}  {'status':}")
+    print(f"  {'----':>4}  {'---------':>9}  {'---------':>12}  {'---------':>12}")
 
     low, high = 0.0, 1.0
-    best_intensity = 0.0
+    best_intensity  = 0.0
+    best_io_ktokens = 0.0
+    phase2: list[dict] = []
 
-    for step in range(binary_steps):
+    for step in range(1, binary_steps + 1):
         mid = (low + high) / 2.0
         bg_tput, io_tput = run_probe(n_io=n_full + 1, io_intensity=mid, **kw)
         interfered = bg_tput < threshold
-        flag = "interferes" if interfered else "ok"
-        print(f"  step {step+1}/{binary_steps}  partial_intensity={mid:.3f}  "
-              f"bg={bg_tput:,.0f}  [{flag}]")
-
+        status = "interferes" if interfered else "ok"
+        print(f"  {step:>4d}  {mid:>9.3f}  {bg_tput*_KT:>12.3f}  {io_tput*_KT:>12.3f}  {status}")
+        phase2.append(dict(step=step, intensity=mid,
+                           bg_ktokens=bg_tput*_KT, io_ktokens=io_tput*_KT,
+                           interfered=interfered))
         if not interfered:
-            best_intensity = mid
-            low = mid        # can push further
+            best_intensity  = mid
+            best_io_ktokens = io_tput * _KT
+            low  = mid
         else:
-            high = mid       # too much, back off
+            high = mid
+
+    # I/O slack in kTokens = io throughput at the best safe point
+    # (n_full full workers + 1 at best_intensity)
+    io_slack_ktokens = best_io_ktokens
 
     print(f"\n  I/O slack: {n_full} full worker(s) + 1 at intensity {best_intensity:.3f}")
     if n_full == 0 and best_intensity == 0.0:
         print("  (background is saturated — even a single low-intensity I/O worker interferes)")
 
     return dict(
-        type              = "sweep_io_loaded",
-        baseline_tput     = baseline_tput,
-        interference_threshold = threshold,
-        drop_pct          = drop_pct,
-        bg_procs          = bg_procs,
-        bg_io_mix         = bg_io_mix,
-        bg_intensity      = bg_intensity,
-        io_slack_full     = n_full,
-        io_slack_partial  = best_intensity,
+        type                  = "sweep_io_loaded",
+        # kTokens summary
+        baseline_bg_ktokens   = baseline_tput * _KT,
+        io_slack_ktokens      = io_slack_ktokens,
+        # raw
+        baseline_tput         = baseline_tput,
+        interference_threshold= threshold,
+        drop_pct              = drop_pct,
+        bg_procs              = bg_procs,
+        bg_io_mix             = bg_io_mix,
+        bg_intensity          = bg_intensity,
+        io_slack_full         = n_full,
+        io_slack_partial      = best_intensity,
+        # probe data for plotting
+        phase1_probes         = phase1,
+        phase2_probes         = phase2,
     )
+
+
+# ---------------------------------------------------------------------------
+# Plot
+# ---------------------------------------------------------------------------
+
+def plot_slack_result(result: dict, out_path: Path) -> None:
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as ticker
+    except ImportError:
+        print("[sweep-io] matplotlib not installed — skipping plot", file=sys.stderr)
+        return
+
+    baseline_kt = result["baseline_bg_ktokens"]
+    threshold_kt = result["interference_threshold"] * _KT
+    slack_kt     = result["io_slack_ktokens"]
+    n_full       = result["io_slack_full"]
+    partial      = result["io_slack_partial"]
+    p1           = result["phase1_probes"]
+    p2           = result["phase2_probes"]
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    fig.suptitle("I/O Sweep Under Background Load — Slack Result",
+                 fontsize=12, fontweight="bold")
+
+    # ---- Panel 1: Phase 1 linear sweep ------------------------------------
+    ax = axes[0]
+    if p1:
+        x  = [0]          + [d["n_io"]        for d in p1]
+        bg = [baseline_kt] + [d["bg_ktokens"]  for d in p1]
+        io = [0.0]         + [d["io_ktokens"]  for d in p1]
+
+        ax.plot(x, bg, "o-", color="#4c72b0", label="bg throughput",  linewidth=2, markersize=5)
+        ax.plot(x, io, "s-", color="#dd8452", label="io throughput",  linewidth=2, markersize=5)
+        ax.axhline(baseline_kt,  color="#2ca02c", linestyle="--", linewidth=1.4,
+                   label=f"baseline ({baseline_kt:.2f} kT/s)")
+        ax.axhline(threshold_kt, color="#c44e52", linestyle=":",  linewidth=1.4,
+                   label=f"threshold ({threshold_kt:.2f} kT/s, −{result['drop_pct']*100:.0f}%)")
+
+        # Mark interference point
+        interf = [d for d in p1 if d["interfered"]]
+        if interf:
+            xi = interf[0]["n_io"]
+            ax.axvline(xi, color="#c44e52", linestyle="--", alpha=0.4)
+            ax.annotate(f"interference\nat {xi} IO worker(s)",
+                        xy=(xi, threshold_kt), xytext=(xi + 0.3, threshold_kt * 1.08),
+                        fontsize=8, color="#c44e52",
+                        arrowprops=dict(arrowstyle="->", color="#c44e52", lw=1))
+
+        ax.set_xlabel("Number of I/O sweep workers")
+        ax.set_ylabel("Throughput (kTokens/s)")
+        ax.set_title("Phase 1 — Linear sweep", fontsize=10, loc="left")
+        ax.legend(fontsize=8)
+        ax.set_xlim(left=0)
+        ax.set_ylim(bottom=0)
+
+    # ---- Panel 2: Phase 2 binary search -----------------------------------
+    ax = axes[1]
+    if p2:
+        x2  = [d["intensity"]   for d in p2]
+        bg2 = [d["bg_ktokens"]  for d in p2]
+        io2 = [d["io_ktokens"]  for d in p2]
+        ok  = [not d["interfered"] for d in p2]
+
+        # Plot points with colour by ok/interferes
+        for xi, bgi, ioi, is_ok in zip(x2, bg2, io2, ok):
+            c = "#4c72b0" if is_ok else "#c44e52"
+            ax.scatter(xi, bgi, color=c, zorder=5, s=60)
+            ax.scatter(xi, ioi, color="#dd8452", marker="s", zorder=5, s=60)
+
+        # Connect dots in step order
+        ax.plot(x2, bg2, "-",  color="#4c72b0", alpha=0.4, linewidth=1)
+        ax.plot(x2, io2, "-",  color="#dd8452", alpha=0.4, linewidth=1)
+
+        ax.axhline(baseline_kt,  color="#2ca02c", linestyle="--", linewidth=1.4,
+                   label=f"baseline ({baseline_kt:.2f} kT/s)")
+        ax.axhline(threshold_kt, color="#c44e52", linestyle=":",  linewidth=1.4,
+                   label=f"threshold ({threshold_kt:.2f} kT/s)")
+
+        if partial > 0:
+            ax.axvline(partial, color="#9467bd", linestyle="--", linewidth=1.4,
+                       label=f"best intensity = {partial:.3f}")
+            ax.annotate(f"io slack\n{slack_kt:.3f} kT/s",
+                        xy=(partial, slack_kt),
+                        xytext=(partial + 0.05, slack_kt * 1.1),
+                        fontsize=8, color="#9467bd",
+                        arrowprops=dict(arrowstyle="->", color="#9467bd", lw=1))
+
+        # Legend entries for scatter colours
+        from matplotlib.lines import Line2D
+        handles, labels = ax.get_legend_handles_labels()
+        handles += [
+            Line2D([0], [0], marker="o", color="w", markerfacecolor="#4c72b0",
+                   markersize=8, label="bg (ok)"),
+            Line2D([0], [0], marker="o", color="w", markerfacecolor="#c44e52",
+                   markersize=8, label="bg (interferes)"),
+            Line2D([0], [0], marker="s", color="w", markerfacecolor="#dd8452",
+                   markersize=8, label="io throughput"),
+        ]
+        ax.legend(handles=handles, fontsize=8)
+
+        ax.set_xlabel(f"Partial intensity of last I/O worker\n({n_full} full worker(s) locked at 1.0)")
+        ax.set_ylabel("Throughput (kTokens/s)")
+        ax.set_title("Phase 2 — Binary search", fontsize=10, loc="left")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(bottom=0)
+
+    # ---- Summary text box -------------------------------------------------
+    summary = (
+        f"Background load:  {result['bg_procs']} workers  "
+        f"io_mix={result['bg_io_mix']}  intensity={result['bg_intensity']}\n"
+        f"Baseline bg:      {baseline_kt:.3f} kTokens/s\n"
+        f"I/O slack:        {n_full} full worker(s) + 1 × {partial:.3f}  "
+        f"→  {slack_kt:.3f} kTokens/s of additional I/O"
+    )
+    fig.text(0.5, 0.01, summary, ha="center", va="bottom", fontsize=8.5,
+             bbox=dict(boxstyle="round,pad=0.4", facecolor="#f0f0f0", alpha=0.8))
+
+    for ax in axes:
+        ax.grid(axis="y", linestyle=":", linewidth=0.6, alpha=0.7)
+        ax.spines[["top", "right"]].set_visible(False)
+
+    fig.tight_layout(rect=[0, 0.10, 1, 0.95])
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    print(f"[sweep-io] Plot saved: {out_path}")
+    plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -213,39 +342,32 @@ def sweep(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Sweep I/O workers under background load; stop on background interference.")
-    parser.add_argument("--bg-procs",     type=int,   required=True, metavar="N",
-                        help="number of background workers")
-    parser.add_argument("--bg-io-mix",    type=float, default=0.3,   metavar="F",
-                        help="background io_mix (default: 0.3)")
-    parser.add_argument("--bg-intensity", type=float, default=0.75,  metavar="F",
-                        help="background intensity (default: 0.75)")
-    parser.add_argument("--duration",     type=int,   default=30,    metavar="S",
-                        help="seconds per probe (default: 30)")
-    parser.add_argument("--drop-pct",     type=float, default=0.05,  metavar="F",
-                        help="background throughput drop fraction to count as interference (default: 0.05)")
-    parser.add_argument("--max-io-procs", type=int,   default=64,    metavar="N",
-                        help="max I/O sweep workers before giving up (default: 64)")
-    parser.add_argument("--tmp-dir",      default="/tmp/slack-meter", metavar="DIR",
-                        help="scratch dir for I/O ops")
-    parser.add_argument("--worker-bin",   default=WORKER_BIN,        metavar="PATH",
-                        help="path to the worker binary")
+    parser.add_argument("--bg-procs",     type=int,   required=True, metavar="N")
+    parser.add_argument("--bg-io-mix",    type=float, default=0.3,   metavar="F")
+    parser.add_argument("--bg-intensity", type=float, default=0.75,  metavar="F")
+    parser.add_argument("--duration",     type=int,   default=30,    metavar="S")
+    parser.add_argument("--drop-pct",     type=float, default=0.05,  metavar="F")
+    parser.add_argument("--max-io-procs", type=int,   default=64,    metavar="N")
+    parser.add_argument("--tmp-dir",      default="/tmp/slack-meter", metavar="DIR")
+    parser.add_argument("--worker-bin",   default=WORKER_BIN,        metavar="PATH")
     parser.add_argument("--output",       default=None,              metavar="FILE",
                         help="write JSON result to this file")
+    parser.add_argument("--plot",         default=None,              metavar="FILE",
+                        help="write slack result figure to this PNG file")
     args = parser.parse_args()
 
     if not os.path.exists(args.worker_bin):
         print(f"[sweep-io] ERROR: worker binary not found at {args.worker_bin}")
-        print("  Run: cmake -B build && cmake --build build")
         sys.exit(1)
 
-    print("=" * 54)
+    print("=" * 60)
     print("  I/O Sweep Under Background Load")
-    print("=" * 54)
+    print("=" * 60)
     print(f"  Background : {args.bg_procs} workers  "
           f"io_mix={args.bg_io_mix}  intensity={args.bg_intensity}")
     print(f"  Probe dur  : {args.duration}s   drop_pct={args.drop_pct*100:.0f}%")
     print(f"  Tmp dir    : {args.tmp_dir}")
-    print("=" * 54)
+    print("=" * 60)
 
     result = sweep(
         bg_procs     = args.bg_procs,
@@ -258,20 +380,27 @@ def main() -> None:
         max_io_procs = args.max_io_procs,
     )
 
-    print("\n" + "=" * 54)
+    print("\n" + "=" * 60)
     print("  Result")
-    print("=" * 54)
-    print(f"  Baseline bg throughput : {result['baseline_tput']:,.0f} ops/s")
+    print("=" * 60)
+    print(f"  Baseline bg throughput : {result['baseline_bg_ktokens']:.3f} kTokens/s")
     print(f"  I/O slack              : {result['io_slack_full']} full worker(s) "
           f"+ 1 at intensity {result['io_slack_partial']:.3f}")
-    print("=" * 54)
+    print(f"  I/O slack throughput   : {result['io_slack_ktokens']:.3f} kTokens/s")
+    print("=" * 60)
 
     if args.output:
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
+        # Exclude raw ops/s fields from JSON to keep it tidy; kTokens suffice
+        export = {k: v for k, v in result.items()
+                  if k not in ("baseline_tput", "interference_threshold")}
         with open(out, "w") as f:
-            json.dump(result, f, indent=2)
+            json.dump(export, f, indent=2)
         print(f"\nResult written to {args.output}")
+
+    if args.plot:
+        plot_slack_result(result, Path(args.plot))
 
 
 if __name__ == "__main__":
