@@ -71,3 +71,35 @@ WorkloadResult run_workload(const WorkloadParams& params);
 // Individual operation (exposed for unit testing / benchmarking).
 // do_cpu_work performs one fixed-size unit of arithmetic work.
 void do_cpu_work();
+
+// ----------------------------------------------------------------------------
+// MemState – per-worker memory-bandwidth state allocated once before the main
+// loop.
+//
+// The buffer spans 2 * MEM_BUF_DOUBLES doubles so do_mem_work() can perform a
+// STREAM-style scale sweep: read from the hi half, scalar-multiply, write to
+// the lo half, then reverse — generating one full cache-busting read+write
+// pass per call.
+//
+// The buffer is sized well above any realistic L3 cache so every sweep forces
+// traffic to DRAM rather than serving hits from cache.
+// ----------------------------------------------------------------------------
+static constexpr size_t MEM_BUF_DOUBLES = 4'000'000;  // 32 MiB per half, 64 MiB total
+
+struct MemState {
+    double* buf = nullptr;   // heap-allocated; length = 2 * MEM_BUF_DOUBLES doubles
+    size_t  n   = 0;         // half-length in doubles (lo = buf[0..n), hi = buf[n..2n))
+};
+
+// Allocate and initialise the memory-bandwidth buffer.
+// Returns a state with buf == nullptr on allocation failure.
+MemState open_mem_buf();
+
+// Perform one STREAM-scale sweep over the buffer:
+//   lo[i] = MEM_SCALAR * hi[i]   (hi → lo pass, read+write)
+//   hi[i] = MEM_SCALAR * lo[i]   (lo → hi pass, read+write)
+// Each call saturates the memory bus for one unit of work.
+void do_mem_work(MemState& st);
+
+// Free the buffer and zero the MemState fields.
+void close_mem_buf(MemState& st);
