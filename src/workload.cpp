@@ -135,6 +135,78 @@ void close_io_file(IoState &st) {
   }
 }
 
+// Multiplier used in the STREAM-style scale sweep.  Must be kept out of the
+// buffer initialisation path (different value) so the compiler cannot fold
+// both sweeps into a no-op identity transform.
+static constexpr double MEM_SCALAR = 3.0;
+
+// ----------------------------------------------------------------------------
+// open_mem_buf – allocate and initialise the cache-busting double buffer.
+//
+// The buffer is intentionally 64 MiB (2 * MEM_BUF_DOUBLES * 8 bytes) so that
+// every do_mem_work() sweep is guaranteed to miss the L3 cache and reach DRAM,
+// mirroring how O_DIRECT in do_io_work() bypasses the page cache and reaches
+// the storage stack.
+//
+// Values are initialised to (i + 1.0) — non-zero so the scalar multiply always
+// produces a meaningfully different result and cannot be silently elided.
+// ----------------------------------------------------------------------------
+MemState open_mem_buf() {
+  MemState st;
+  st.n   = MEM_BUF_DOUBLES;
+  st.buf = static_cast<double *>(malloc(2 * st.n * sizeof(double)));
+  if (!st.buf) {
+    st.n = 0;
+    return st;
+  }
+  for (size_t i = 0; i < 2 * st.n; ++i)
+    st.buf[i] = static_cast<double>(i + 1);
+  return st;
+}
+
+// ----------------------------------------------------------------------------
+// do_mem_work – one STREAM-scale sweep over the double buffer.
+//
+// Adapted from mem_bw.cpp's two-pass scale pattern:
+//   Pass 1 (hi → lo):  lo[i] = MEM_SCALAR * hi[i]
+//   Pass 2 (lo → hi):  hi[i] = MEM_SCALAR * lo[i]
+//
+// Each pass reads n doubles from one half and writes n doubles to the other,
+// producing ~64 MiB of DRAM traffic per call (2 × n × 8 bytes read +
+// 2 × n × 8 bytes written).  Because n = MEM_BUF_DOUBLES = 4 M doubles the
+// working set dwarfs any real L3 cache, so all traffic goes to main memory —
+// the RAM axis of the I/O / RAM / CPU triangle.
+//
+// No RNG parameter is needed: unlike I/O ops (which randomise their offset to
+// avoid storage-controller optimisations), streaming bandwidth is measured by
+// sequential access.  Sequential access is also what maximises DRAM row-buffer
+// hit rate and therefore produces the highest sustainable bandwidth.
+// ----------------------------------------------------------------------------
+void do_mem_work(MemState &st) {
+  if (!st.buf)
+    return;
+
+  double *lo = st.buf;
+  double *hi = st.buf + st.n;
+
+  // Pass 1: read from hi half, write to lo half.
+  for (size_t i = 0; i < st.n; ++i)
+    lo[i] = MEM_SCALAR * hi[i];
+
+  // Pass 2: read from lo half, write to hi half.
+  for (size_t i = 0; i < st.n; ++i)
+    hi[i] = MEM_SCALAR * lo[i];
+}
+
+// ----------------------------------------------------------------------------
+// close_mem_buf – release the buffer allocated by open_mem_buf.
+// ----------------------------------------------------------------------------
+void close_mem_buf(MemState &st) {
+  free(st.buf);
+  st.buf = nullptr;
+  st.n   = 0;
+}
+
 // ----------------------------------------------------------------------------
 // run_workload – main loop.
 //
