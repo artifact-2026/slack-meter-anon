@@ -234,6 +234,8 @@ WorkloadResult run_workload(const WorkloadParams &params) {
             params.tmp_dir.c_str());
   }
 
+  MemState mem_state = open_mem_buf();
+
   WorkloadResult res{};
   const auto start = std::chrono::steady_clock::now();
   const auto deadline = start + std::chrono::seconds(params.duration_secs);
@@ -249,28 +251,36 @@ WorkloadResult run_workload(const WorkloadParams &params) {
       ++res.sleep_ops;
     } else {
       const double n = dist(rng);
-      if (n > params.io_mix) {
-        // CPU phase: hammer do_cpu_work() until the tick window closes.
-        while (std::chrono::steady_clock::now() < tick_end) {
-          do_cpu_work();
-          ++res.cpu_ops;
-        }
-      } else {
+      if (n < params.io_mix) {
         // I/O phase: keep issuing O_DIRECT pwrite ops until the tick closes.
         while (std::chrono::steady_clock::now() < tick_end) {
           do_io_work(io_state, rng);
           ++res.io_ops;
+        }
+      } else if (n < params.io_mix + params.mem_mix) {
+        // MEM phase: hammer memory bandwidth
+        while (std::chrono::steady_clock::now() < tick_end) {
+          do_mem_work(mem_state);
+          ++res.mem_ops;
+        }
+      } else {
+        // CPU phase: hammer do_cpu_work() until the tick window closes.
+        while (std::chrono::steady_clock::now() < tick_end) {
+          do_cpu_work();
+          ++res.cpu_ops;
         }
       }
     }
   }
 
   close_io_file(io_state);
+  close_mem_buf(mem_state);
 
   const auto finish = std::chrono::steady_clock::now();
   res.elapsed_secs = std::chrono::duration<double>(finish - start).count();
-  res.throughput = (res.cpu_ops + res.io_ops) / res.elapsed_secs;
+  res.throughput = (res.cpu_ops + res.io_ops + res.mem_ops) / res.elapsed_secs;
   res.cpu_throughput = res.cpu_ops / res.elapsed_secs;
   res.io_throughput = res.io_ops / res.elapsed_secs;
+  res.mem_throughput = res.mem_ops / res.elapsed_secs;
   return res;
 }

@@ -12,6 +12,7 @@
 // ----------------------------------------------------------------------------
 struct WorkloadParams {
     double      io_mix;        // [0, 1]
+    double      mem_mix;       // [0, 1]
     double      intensity;     // [0, 1]
     int         duration_secs; // how long to run
     std::string tmp_dir;       // scratch space for I/O ops
@@ -24,11 +25,13 @@ struct WorkloadParams {
 struct WorkloadResult {
     uint64_t cpu_ops;
     uint64_t io_ops;
+    uint64_t mem_ops;
     uint64_t sleep_ops;
     double   elapsed_secs;
-    double   throughput;      // (cpu_ops + io_ops) / elapsed_secs  — used for saturation
+    double   throughput;      // (cpu_ops + io_ops + mem_ops) / elapsed_secs  — used for saturation
     double   cpu_throughput;  // cpu_ops / elapsed_secs
     double   io_throughput;   // io_ops  / elapsed_secs
+    double   mem_throughput;  // mem_ops / elapsed_secs
 };
 
 // ----------------------------------------------------------------------------
