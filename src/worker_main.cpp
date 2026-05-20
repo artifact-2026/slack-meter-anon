@@ -20,7 +20,7 @@
 
 static void usage(const char* prog) {
     fprintf(stderr,
-        "Usage: %s [--io-mix <float>] [--intensity <float>]\n"
+        "Usage: %s [--io-mix <float>] [--mem-mix <float>] [--intensity <float>]\n"
         "          [--duration <secs>] [--tmp-dir <path>]\n",
         prog);
 }
@@ -28,6 +28,7 @@ static void usage(const char* prog) {
 int main(int argc, char* argv[]) {
     WorkloadParams params;
     params.io_mix        = 0.3;
+    params.mem_mix       = 0.0;
     params.intensity     = 0.75;
     params.duration_secs = 30;
     params.tmp_dir       = "/tmp/slack-meter";
@@ -36,6 +37,8 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--io-mix") == 0 && i + 1 < argc) {
             params.io_mix = atof(argv[++i]);
+        } else if (strcmp(argv[i], "--mem-mix") == 0 && i + 1 < argc) {
+            params.mem_mix = atof(argv[++i]);
         } else if (strcmp(argv[i], "--intensity") == 0 && i + 1 < argc) {
             params.intensity = atof(argv[++i]);
         } else if (strcmp(argv[i], "--duration") == 0 && i + 1 < argc) {
@@ -62,22 +65,28 @@ int main(int argc, char* argv[]) {
     printf("{"
            "\"cpu_ops\":%lu,"
            "\"io_ops\":%lu,"
+           "\"mem_ops\":%lu,"
            "\"sleep_ops\":%lu,"
            "\"elapsed_secs\":%.4f,"
            "\"throughput\":%.2f,"
            "\"cpu_throughput\":%.2f,"
            "\"io_throughput\":%.2f,"
+           "\"mem_throughput\":%.2f,"
            "\"io_mix\":%.4f,"
+           "\"mem_mix\":%.4f,"
            "\"intensity\":%.4f"
            "}\n",
            (unsigned long)r.cpu_ops,
            (unsigned long)r.io_ops,
+           (unsigned long)r.mem_ops,
            (unsigned long)r.sleep_ops,
            r.elapsed_secs,
            r.throughput,
            r.cpu_throughput,
            r.io_throughput,
+           r.mem_throughput,
            params.io_mix,
+           params.mem_mix,
            params.intensity);
 
     return 0;
