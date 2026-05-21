@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# run_sweep_timeseries.sh
+# run_saturation_sweep.sh
 # =======================
-# Like run_timeseries.sh, but instead of a fixed workload it runs a sweep
-# via orchestrate.py while simultaneously recording iostat and vmstat.
+# Runs a saturation + slack sweep via orchestrate.py while simultaneously
+# recording iostat and vmstat.
 #
 # The sweep type is set by MODE. Because sweep duration is not known in
 # advance, iostat and vmstat are run without a sample-count limit and

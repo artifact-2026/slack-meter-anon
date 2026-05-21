@@ -28,9 +28,14 @@ services:
           rate: "650mb"
     environment:
       PYTHONUNBUFFERED: "1"
+      MODE: ${MODE:-full}
+      DURATION: ${DURATION:-30}
+      MAX_PROCS: ${MAX_PROCS:-32}
+      MIN_PROCS: ${MIN_PROCS:-10}
+      IO_MIX: ${IO_MIX:-0.3}
+      INTENSITY: ${INTENSITY:-0.75}
+      DROP_PCT: ${DROP_PCT:-0.05}
     volumes:
       - ../results:/app/results
       - /holly/scratch:/holly/scratch
       - /holly/slack-meter-calibrate:/holly/slack-meter-calibrate
-    command: >
-      --mode       ${MODE:-full} --duration   ${DURATION:-30} --max-procs  ${MAX_PROCS:-32} --min-procs  ${MIN_PROCS:-10} --io-mix     ${IO_MIX:-0.3} --intensity  ${INTENSITY:-0.75} --drop-pct   ${DROP_PCT:-0.05} --tmp-dir    /holly/scratch --output     results/experiment.json
