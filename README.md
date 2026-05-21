@@ -44,7 +44,7 @@ This produces a single binary: `build/worker`.
 ### Quick start (full pipeline)
 
 ```bash
-bash scripts/run_experiment.sh
+bash scripts/run_saturation_sweep.sh
 ```
 
 This builds, runs the full experiment, generates an HTML report, and opens it.
@@ -60,7 +60,7 @@ Tune behaviour with environment variables:
 Example — faster iteration run:
 
 ```bash
-DURATION=10 MAX_PROCS=8 bash scripts/run_experiment.sh
+DURATION=10 MAX_PROCS=8 bash scripts/run_saturation_sweep.sh
 ```
 
 ---
@@ -166,7 +166,7 @@ slack-meter/
 ├── scripts/
 │   ├── orchestrate.py      # saturation + slack experiments
 │   ├── report.py           # HTML report generation
-│   └── run_experiment.sh   # one-shot build + run + report
+│   └── run_saturation_sweep.sh   # one-shot build + run + report
 └── infra/
     ├── Dockerfile
     └── docker-compose.yml

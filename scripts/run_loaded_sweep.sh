@@ -11,7 +11,7 @@
 #
 # SWEEP selects which sweep to run alongside the background workers:
 #   SWEEP=<cpu|io|ram> → probe.py: sweeps pure workers to find slack
-#   SWEEP=slack        → orchestrate.py: saturation + slack measurement (default)
+#   SWEEP=none         → no sweep, just background load and collectors (default)
 #
 # Background workers are started with a long timeout and killed when the sweep
 # finishes.
@@ -26,7 +26,7 @@
 #
 #   Sweep selector
 #   --------------
-#   SWEEP=<cpu|io|ram|slack> which sweep to run                     (default: slack)
+#   SWEEP=<cpu|io|ram|none>  which sweep to run                     (default: none)
 #
 #   Sweep — probe (probe.py)
 #   ----------------------------
@@ -59,7 +59,7 @@ BUILD="$REPO/build"
 WORKER="$BUILD/worker"
 
 # Sweep selector
-SWEEP="${SWEEP:-slack}"
+SWEEP="${SWEEP:-none}"
 
 # Sweep / shared params
 MODE="${MODE:-full}"
@@ -88,8 +88,8 @@ BG_DURATION=86400   # 24 h ceiling; always killed before expiry
 log() { echo "[loaded-sweep] $*"; }
 
 case "$SWEEP" in
-    cpu|io|ram|slack) ;;
-    *) echo "[loaded-sweep] ERROR: SWEEP must be 'cpu', 'io', 'ram', or 'slack' (got '$SWEEP')" >&2; exit 1 ;;
+    cpu|io|ram|none) ;;
+    *) echo "[loaded-sweep] ERROR: SWEEP must be 'cpu', 'io', 'ram', or 'none' (got '$SWEEP')" >&2; exit 1 ;;
 esac
 
 # ---------------------------------------------------------------------------
@@ -142,31 +142,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ---------------------------------------------------------------------------
-# For SWEEP=slack: start always-on background workers (they provide the
-# constant load signal that orchestrate.py probes on top of).
-#
-# For probe sweeps (cpu|io|ram): probe.py manages its own per-probe background
-# workers so it can measure their throughput and detect interference.
-# Always-on workers are not needed — the per-probe workers appear in the
-# iostat/vmstat time series just as well.
+# Note: For probe sweeps (cpu|io|ram), probe.py manages its own background
+# workers so it can precisely measure their throughput and detect interference.
+# We only manually start background workers here for SWEEP=none.
 # ---------------------------------------------------------------------------
-if [[ "$SWEEP" == "slack" ]]; then
-    log "Starting $BG_PROCS background worker(s)  io_mix=$BG_IO_MIX  intensity=$BG_INTENSITY"
-    for i in $(seq 1 "$BG_PROCS"); do
-        "$WORKER" \
-            --io-mix    "$BG_IO_MIX"    \
-            --mem-mix   "$BG_MEM_MIX"   \
-            --intensity "$BG_INTENSITY" \
-            --duration  "$BG_DURATION"  \
-            --tmp-dir   "$TMP_DIR"      \
-            --seed      $((SEED + i))   \
-            > "$OUTPUT_DIR/bg_worker_${i}.json" &
-        BG_PIDS+=($!)
-    done
-    log "Background worker PIDs: ${BG_PIDS[*]}"
-    # Settle so background workers are generating load before the sweep starts
-    sleep 2
-fi
 
 # ---------------------------------------------------------------------------
 # Start collectors (no sample-count limit — run until killed)
@@ -205,20 +184,22 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
         --output       "$OUTPUT_DIR/sweep_${SWEEP}.json" \
         --plot         "$OUTPUT_DIR/slack_result_${SWEEP}.png"
 else
-    log "Starting slack sweep (orchestrate.py)  mode=$MODE  duration=${DURATION}s  max_procs=$MAX_PROCS"
-    log "  (background workers remain running throughout)"
-    python3 "$REPO/scripts/orchestrate.py" \
-        --mode          "$MODE"        \
-        --duration      "$DURATION"    \
-        --max-procs     "$MAX_PROCS"   \
-        --min-procs     "$MIN_PROCS"   \
-        --io-mix        "$IO_MIX"      \
-        --intensity     "$INTENSITY"   \
-        --drop-pct      "$DROP_PCT"    \
-        --sat-epsilon   "$SAT_EPSILON" \
-        --tmp-dir       "$TMP_DIR"     \
-        --seed          $((SEED + BG_PROCS + 1)) \
-        --output        "$OUTPUT_DIR/experiment.json"
+    log "Starting $BG_PROCS background worker(s)  io_mix=$BG_IO_MIX  mem_mix=$BG_MEM_MIX  intensity=$BG_INTENSITY"
+    for i in $(seq 1 "$BG_PROCS"); do
+        "$WORKER" \
+            --io-mix    "$BG_IO_MIX"    \
+            --mem-mix   "$BG_MEM_MIX"   \
+            --intensity "$BG_INTENSITY" \
+            --duration  "$BG_DURATION"  \
+            --tmp-dir   "$TMP_DIR"      \
+            --seed      $((SEED + i))   \
+            > "$OUTPUT_DIR/bg_worker_${i}.json" &
+        BG_PIDS+=($!)
+    done
+    log "Background worker PIDs: ${BG_PIDS[*]}"
+    
+    log "Running background workers ONLY for ${DURATION}s"
+    sleep "$DURATION"
 fi
 
 # ---------------------------------------------------------------------------
@@ -254,26 +235,14 @@ python3 "$REPO/scripts/plot_timeseries.py" \
     --io-mix     "$BG_IO_MIX"  \
     --intensity  "$BG_INTENSITY"
 
-# ---------------------------------------------------------------------------
-# Sweep summary report (slack sweep only)
-# ---------------------------------------------------------------------------
-if [[ -f "$OUTPUT_DIR/experiment.json" ]]; then
-    log "Generating sweep report..."
-    python3 "$REPO/scripts/report.py" \
-        "$OUTPUT_DIR/experiment.json" \
-        --report "$OUTPUT_DIR/report.html"
-    log "  Sweep report : $OUTPUT_DIR/report.html"
-fi
+
 
 log "Done!"
 if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
     log "  ${SWEEP^^} sweep result : $OUTPUT_DIR/sweep_${SWEEP}.json"
     log "  Slack figure     : $OUTPUT_DIR/slack_result_${SWEEP}.png"
 else
-    log "  Experiment JSON  : $OUTPUT_DIR/experiment.json"
-    log "  Sweep report     : $OUTPUT_DIR/report.html"
+    log "  No sweep result  : (background only)"
 fi
 log "  Time-series plot : $OUTPUT_DIR/timeseries.png"
-log "  Sweep report     : $OUTPUT_DIR/report.html"
-log "  Experiment JSON  : $OUTPUT_DIR/experiment.json"
 log "  Raw collectors   : $OUTPUT_DIR/vmstat_raw.txt  $OUTPUT_DIR/iostat_raw.txt"

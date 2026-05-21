@@ -10,15 +10,20 @@ REPO_ROOT  = Path(__file__).parent.parent.resolve()
 WORKER_BIN = str(REPO_ROOT / "build" / "worker")
 
 def run_workers(num_full_workers, fractional_intensity=0.0, *,
-                duration, tmp_dir, worker_bin):
-    """Spawns N full workers + 1 optional fractional worker and returns total I/O throughput."""
+                resource_type, duration, tmp_dir, worker_bin):
+    """Spawns N full workers + 1 optional fractional worker and returns total resource throughput."""
     msg = f"Running {num_full_workers} worker(s)"
     if fractional_intensity > 0:
         msg += f" + 1 fractional ({fractional_intensity:.2f})"
     print(f"{msg}... ", end="", flush=True)
 
+    io_mix = 1.0 if resource_type == "io" else 0.0
+    mem_mix = 1.0 if resource_type == "ram" else 0.0
+
     def make_cmd(intensity, seed):
-        return [worker_bin, "--io-mix", "1.0",
+        return [worker_bin, 
+                "--io-mix", str(io_mix),
+                "--mem-mix", str(mem_mix),
                 "--intensity", str(intensity),
                 "--duration",  str(duration),
                 "--tmp-dir",   tmp_dir,
@@ -35,7 +40,7 @@ def run_workers(num_full_workers, fractional_intensity=0.0, *,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         processes.append(p)
 
-    total_io_throughput = 0.0
+    total_throughput = 0.0
     for p in processes:
         stdout, stderr = p.communicate()
         if p.returncode != 0:
@@ -43,20 +48,25 @@ def run_workers(num_full_workers, fractional_intensity=0.0, *,
             sys.exit(1)
         try:
             data = json.loads(stdout.strip())
-            total_io_throughput += data["io_throughput"]
+            if resource_type == "cpu":
+                total_throughput += data.get("cpu_throughput", 0.0)
+            elif resource_type == "ram":
+                total_throughput += data.get("mem_throughput", 0.0)
+            else:
+                total_throughput += data.get("io_throughput", 0.0)
         except json.JSONDecodeError:
             print(f"\nFailed to parse worker output: {stdout}")
             sys.exit(1)
 
-    print(f"{total_io_throughput:,.0f} ops/s")
-    return total_io_throughput
+    print(f"{total_throughput:,.0f} ops/s")
+    return total_throughput
 
 
-def calibrate(*, duration, tmp_dir, worker_bin):
-    """Run the full I/O calibration and return a result dict."""
+def calibrate(*, resource_type, duration, tmp_dir, worker_bin):
+    """Run the full capacity calibration and return a result dict."""
     os.makedirs(tmp_dir, exist_ok=True)
 
-    kw = dict(duration=duration, tmp_dir=tmp_dir, worker_bin=worker_bin)
+    kw = dict(resource_type=resource_type, duration=duration, tmp_dir=tmp_dir, worker_bin=worker_bin)
 
     peak_throughput = 0.0
     optimal_workers = 0
@@ -101,18 +111,21 @@ def calibrate(*, duration, tmp_dir, worker_bin):
             high = mid
 
     return dict(
-        peak_io_throughput = best_throughput,
+        resource           = resource_type,
+        peak_throughput    = best_throughput,
         optimal_workers    = optimal_workers,
         best_intensity     = best_intensity,
     )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Calibrate maximum I/O capacity (T_io).")
+    parser = argparse.ArgumentParser(description="Calibrate maximum resource capacity.")
+    parser.add_argument("--resource-type", choices=["cpu", "io", "ram"], required=True,
+                        help="The resource type to calibrate.")
     parser.add_argument("--duration",   type=int,   default=30,
                         metavar="S",   help="seconds per worker probe (default: 30)")
     parser.add_argument("--tmp-dir",    default="/tmp/slack-meter-calibrate",
-                        metavar="DIR", help="scratch dir for I/O ops")
+                        metavar="DIR", help="scratch dir for ops")
     parser.add_argument("--worker-bin", default=WORKER_BIN,
                         metavar="PATH",help="path to the worker binary")
     parser.add_argument("--output",     default=None,
@@ -125,23 +138,23 @@ def main():
         sys.exit(1)
 
     print("==================================================")
-    print(" Calibrating Maximum I/O Capacity (T_io) ")
+    print(f" Calibrating Maximum Capacity for: {args.resource_type.upper()} ")
     print("==================================================")
-    print(f"Configuration: pure I/O (4KiB sync random writes), {args.duration}s duration")
+    print(f"Configuration: {args.duration}s duration")
     print(f"Tmp dir: {args.tmp_dir}")
     print("--------------------------------------------------")
 
-    result = calibrate(duration=args.duration, tmp_dir=args.tmp_dir,
-                       worker_bin=args.worker_bin)
+    result = calibrate(resource_type=args.resource_type, duration=args.duration, 
+                       tmp_dir=args.tmp_dir, worker_bin=args.worker_bin)
 
     print("==================================================")
     print(" Calibration Complete ")
     print("==================================================")
-    print(f"Peak I/O Throughput (T_io): {result['peak_io_throughput']:,.0f} ops/s")
+    print(f"Peak {args.resource_type.upper()} Throughput: {result['peak_throughput']:,.0f} ops/s")
     print(f"Achieved at concurrency:    {result['optimal_workers']} full "
           f"+ 1 fractional ({result['best_intensity']:.2f})")
-    k = result['peak_io_throughput'] / 1000.0
-    print(f"System I/O Capacity:        {k:,.2f} kTokens")
+    k = result['peak_throughput'] / 1000.0
+    print(f"System Capacity:            {k:,.2f} kOps")
     print("==================================================")
 
     if args.output:

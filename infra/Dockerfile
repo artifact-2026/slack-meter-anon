@@ -25,6 +25,8 @@ RUN apt-get update -y && \
         python3-pip \
         python3-dev \
         ca-certificates \
+        sysstat \
+        procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Python analysis deps
@@ -44,5 +46,6 @@ RUN mkdir -p /tmp/slack-meter /app/results
 
 ENV PYTHONUNBUFFERED=1
 
-ENTRYPOINT ["python3", "/app/scripts/orchestrate.py"]
-CMD ["--mode", "full", "--duration", "30", "--output", "results/experiment.json"]
+ENV SKIP_BUILD=1
+
+ENTRYPOINT ["bash", "/app/scripts/run_saturation_sweep.sh"]

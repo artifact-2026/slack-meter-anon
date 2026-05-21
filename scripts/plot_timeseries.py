@@ -2,7 +2,7 @@
 """
 plot_timeseries.py
 ==================
-Parses the raw iostat / vmstat output produced by run_timeseries.sh,
+Parses the raw iostat / vmstat output produced by run_loaded_sweep.sh,
 writes iostat.csv, and renders a four-panel time-series PNG.
 
 Panels
