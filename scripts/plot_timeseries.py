@@ -253,11 +253,11 @@ def plot(
                      alpha=0.85)
         ax.set_ylabel("CPU %")
         ax.set_ylim(0, 100)
-        ax.legend(loc="upper right", ncol=4, fontsize=8)
+        ax.legend(loc="upper left", ncol=4, fontsize=8)
         ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%g%%"))
     else:
         ax.text(0.5, 0.5, "No vmstat data", ha="center", va="center", transform=ax.transAxes)
-    ax.set_title("CPU breakdown (vmstat)", fontsize=10, loc="left")
+    ax.set_title("CPU Usage (vmstat)", fontsize=10, loc="left")
 
     # ---- Panel 2: Disk IOPS (iostat) --------------------------------------
     ax = axes[1]
@@ -279,11 +279,10 @@ def plot(
         ax.fill_between(t, r_s, alpha=0.15, color="#4c72b0")
         ax.fill_between(t, w_s, alpha=0.15, color="#dd8452")
         ax.set_ylabel("IOPS")
-        ax.legend(loc="upper right", fontsize=8)
+        ax.legend(loc="lower left", fontsize=8)
     else:
         ax.text(0.5, 0.5, "No iostat data", ha="center", va="center", transform=ax.transAxes)
-    dev_label = f" ({device})" if device else ""
-    ax.set_title(f"Disk IOPS{dev_label} (iostat)", fontsize=10, loc="left")
+    ax.set_title("Disk IOPS (iostat)", fontsize=10, loc="left")
 
     # ---- Panel 3: Disk bandwidth (iostat) ---------------------------------
     ax = axes[2]
@@ -297,10 +296,10 @@ def plot(
         ax.fill_between(t, [v / scale for v in rk], alpha=0.15, color="#4c72b0")
         ax.fill_between(t, [v / scale for v in wk], alpha=0.15, color="#dd8452")
         ax.set_ylabel(unit)
-        ax.legend(loc="upper right", fontsize=8)
+        ax.legend(loc="lower left", fontsize=8)
     else:
         ax.text(0.5, 0.5, "No iostat data", ha="center", va="center", transform=ax.transAxes)
-    ax.set_title(f"Disk bandwidth{dev_label} (iostat)", fontsize=10, loc="left")
+    ax.set_title("Disk bandwidth (iostat)", fontsize=10, loc="left")
 
     # ---- Panel 4: %util and await (iostat) --------------------------------
     ax = axes[3]
@@ -340,16 +339,17 @@ def plot(
             ax2.tick_params(axis="y", labelcolor="#9467bd")
             lines1, labels1 = ax.get_legend_handles_labels()
             lines2, labels2 = ax2.get_legend_handles_labels()
-            ax.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=8)
+            ax.legend(lines1 + lines2, labels1 + labels2, loc="lower left", fontsize=8)
         else:
-            ax.legend(loc="upper right", fontsize=8)
+            ax.legend(loc="lower left", fontsize=8)
     else:
         ax.text(0.5, 0.5, "No iostat data", ha="center", va="center", transform=ax.transAxes)
-    ax.set_title(f"Disk utilisation & latency{dev_label} (iostat)", fontsize=10, loc="left")
+    ax.set_title("Disk utilisation & latency (iostat)", fontsize=10, loc="left")
 
     # ---- Shared x-axis label ----------------------------------------------
     axes[-1].set_xlabel("Elapsed time (s)")
     for a in axes:
+        a.margins(x=0)
         a.grid(axis="y", linestyle=":", linewidth=0.6, alpha=0.7)
         a.spines[["top", "right"]].set_visible(False)
 
