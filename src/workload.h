@@ -17,6 +17,7 @@ struct WorkloadParams {
     int         duration_secs; // how long to run
     std::string tmp_dir;       // scratch space for I/O ops
     uint64_t    seed;          // RNG seed (fixed for reproducibility)
+    std::string io_mode;       // rand_write, rand_read, seq_write, buf_write
 };
 
 // ----------------------------------------------------------------------------

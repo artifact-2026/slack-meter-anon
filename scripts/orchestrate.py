@@ -71,6 +71,7 @@ def spawn_workers(
     tmp_dir: str,
     base_seed: int = 42,
     seed_offset: int = 0,
+    io_mode: str = "rand_write",
 ) -> list[dict]:
     """Launch n workers in parallel, wait for all, return parsed JSON results.
 
@@ -87,6 +88,7 @@ def spawn_workers(
                 "--duration",  str(duration),
                 "--tmp-dir",   tmp_dir,
                 "--seed",      str(base_seed + seed_offset + i),
+                "--io-mode",   io_mode,
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -149,6 +151,7 @@ def run_saturation(
     sat_epsilon: float         = 1.02,
     marginal_threshold: float  = 0.025,
     min_consecutive_small: int = 1,
+    io_mode: str               = "rand_write",
 ) -> dict:
     """
     Ramp the number of baseline-workload processes from 1 to max_procs and
@@ -204,7 +207,7 @@ def run_saturation(
     for n in range(1, max_procs + 1):
         print(f"[saturation]  n={n} ...", end=" ", flush=True)
         results = spawn_workers(n, io_mix, intensity, duration, tmp_dir,
-                                base_seed=base_seed, seed_offset=n * 1000)
+                                base_seed=base_seed, seed_offset=n * 1000, io_mode=io_mode)
         if not results:
             print("(no results – skipping)")
             continue
@@ -260,6 +263,8 @@ def measure_slack(
     tmp_dir:            str   = DEFAULT_TMP,
     drop_pct:           float = 0.05,
     base_seed:          int   = 42,
+    bg_io_mode:         str   = "rand_write",
+    probe_io_mode:      str   = "rand_write",
 ) -> dict:
     """
     Determine how much of `slack_resource`-only load can be added before the
@@ -315,7 +320,7 @@ def measure_slack(
         """
         nonlocal probe_index
 
-        def make_cmd(io_mix: float, intensity: float, seed: int) -> list[str]:
+        def make_cmd(io_mix: float, intensity: float, seed: int, mode: str) -> list[str]:
             return [
                 str(WORKER_BIN),
                 "--io-mix",    str(io_mix),
@@ -323,6 +328,7 @@ def measure_slack(
                 "--duration",  str(duration),
                 "--tmp-dir",   tmp_dir,
                 "--seed",      str(seed),
+                "--io-mode",   mode,
             ]
 
         base_seed_offset  = 100_000 + probe_index * 1000
@@ -332,13 +338,13 @@ def measure_slack(
         # Launch all workers before waiting on any of them.
         base_procs_list = [
             subprocess.Popen(make_cmd(baseline_io_mix, baseline_intensity,
-                                      base_seed + base_seed_offset + i),
+                                      base_seed + base_seed_offset + i, bg_io_mode),
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             for i in range(baseline_procs)
         ]
         slack_procs_list = [
             subprocess.Popen(make_cmd(slack_io_mix, intensity,
-                                      base_seed + slack_seed_offset + i),
+                                      base_seed + slack_seed_offset + i, probe_io_mode),
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             for i, intensity in enumerate(slack_intensities)
         ]
@@ -506,8 +512,10 @@ def main() -> None:
     parser.add_argument("--max-procs",  type=int,   default=32,    metavar="N")
     parser.add_argument("--min-procs",  type=int,   default=4,     metavar="N",
                         help="Minimum processes to sweep before saturation early-stop (default: 4)")
-    parser.add_argument("--tmp-dir",    default=DEFAULT_TMP)
-    parser.add_argument("--output",     default="results/experiment.json")
+    parser.add_argument("--tmp-dir",     default=DEFAULT_TMP,    metavar="DIR")
+    parser.add_argument("--bg-io-mode",  default="rand_write",   help="Background IO Mode")
+    parser.add_argument("--probe-io-mode",default="rand_write",  help="Probe IO Mode")
+    parser.add_argument("--output",      default=None,           metavar="FILE")
     parser.add_argument("--drop-pct",    type=float, default=0.05,  metavar="F",
                         help="Fraction of baseline throughput drop to count as interference")
     parser.add_argument("--sat-epsilon", type=float, default=1.02, metavar="F",
@@ -537,6 +545,7 @@ def main() -> None:
             sat_epsilon           = args.sat_epsilon,
             marginal_threshold    = args.marginal_threshold,
             min_consecutive_small = args.min_consecutive_small,
+            io_mode               = args.bg_io_mode,
         )
         all_results.append(sat)
 
@@ -555,6 +564,8 @@ def main() -> None:
                 tmp_dir            = args.tmp_dir,
                 drop_pct           = args.drop_pct,
                 base_seed          = args.seed,
+                bg_io_mode         = args.bg_io_mode,
+                probe_io_mode      = args.probe_io_mode,
             ))
 
         if args.mode in ("slack-io", "full"):
@@ -568,6 +579,8 @@ def main() -> None:
                 tmp_dir            = args.tmp_dir,
                 drop_pct           = args.drop_pct,
                 base_seed          = args.seed,
+                bg_io_mode         = args.bg_io_mode,
+                probe_io_mode      = args.probe_io_mode,
             ))
 
     out_path = Path(args.output)

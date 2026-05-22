@@ -31,6 +31,7 @@ export BG_PROCS="${BG_PROCS:-4}"
 export BG_IO_MIX="${BG_IO_MIX:-0.3}"
 export BG_MEM_MIX="${BG_MEM_MIX:-0.0}"
 export BG_INTENSITY="${BG_INTENSITY:-0.75}"
+export IO_MODE="${IO_MODE:-rand_write}"
 
 # Note: SKIP_BUILD=1 avoids rebuilding the cmake project inside the bash script
 # since the Dockerfile already builds the binary.
@@ -38,6 +39,6 @@ export SKIP_BUILD=1
 
 # Run docker-compose overriding the entrypoint to run the bash script
 docker compose -f "$(dirname "$0")/docker-compose.yml" run --rm --build \
-  -e SWEEP -e BG_PROCS -e BG_IO_MIX -e BG_MEM_MIX -e BG_INTENSITY -e SKIP_BUILD \
+  -e SWEEP -e BG_PROCS -e BG_IO_MIX -e BG_MEM_MIX -e BG_INTENSITY -e IO_MODE -e SKIP_BUILD \
   --entrypoint bash \
   experiment /app/scripts/run_loaded_sweep.sh "$@"

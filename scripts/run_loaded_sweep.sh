@@ -68,6 +68,8 @@ MAX_PROCS="${MAX_PROCS:-32}"
 MIN_PROCS="${MIN_PROCS:-4}"
 IO_MIX="${IO_MIX:-0.3}"
 INTENSITY="${INTENSITY:-0.75}"
+BG_IO_MODE="${BG_IO_MODE:-${IO_MODE:-rand_write}}"
+PROBE_IO_MODE="${PROBE_IO_MODE:-${IO_MODE:-rand_write}}"
 DROP_PCT="${DROP_PCT:-0.025}"
 SAT_EPSILON="${SAT_EPSILON:-1.025}"
 TMP_DIR="${TMP_DIR:-/holly/slack-meter-loaded-sweep}"
@@ -181,6 +183,8 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
         --drop-pct     "$DROP_PCT"       \
         --tmp-dir      "$TMP_DIR"        \
         --worker-bin   "$BUILD/worker"   \
+        --bg-io-mode   "$BG_IO_MODE"     \
+        --probe-io-mode "$PROBE_IO_MODE" \
         --output       "$OUTPUT_DIR/sweep_${SWEEP}.json" \
         --plot         "$OUTPUT_DIR/slack_result_${SWEEP}.png"
 else
@@ -193,6 +197,7 @@ else
             --duration  "$DURATION"     \
             --tmp-dir   "$TMP_DIR"      \
             --seed      $((SEED + i))   \
+            --io-mode   "$BG_IO_MODE"   \
             > "$OUTPUT_DIR/bg_worker_${i}.json" &
         BG_PIDS+=($!)
     done

@@ -55,32 +55,35 @@ def run_probe(
     tmp_dir:      str,
     worker_bin:   str,
     tput_key:     str,
+    bg_io_mode:   str = "rand_write",
+    probe_io_mode: str = "rand_write",
 ) -> tuple[float, float]:
     """Run bg + probe workers concurrently; return (bg_tput, probe_tput) in ops/s."""
-    def make_cmd(io_mix: float, mem_mix: float, intensity: float, seed: int) -> list[str]:
+    def make_cmd(io_mix: float, mem_mix: float, intensity: float, seed: int, mode: str) -> list[str]:
         return [worker_bin,
                 "--io-mix",    str(io_mix),
                 "--mem-mix",   str(mem_mix),
                 "--intensity", str(intensity),
                 "--duration",  str(duration),
                 "--tmp-dir",   tmp_dir,
-                "--seed",      str(seed)]
+                "--seed",      str(seed),
+                "--io-mode",   mode]
 
     procs: list[subprocess.Popen] = []
     for i in range(bg_procs):
         procs.append(subprocess.Popen(
-            make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i),
+            make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i, bg_io_mode),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
     probe_idx = 0
     for i in range(n_probe_full):
         procs.append(subprocess.Popen(
-            make_cmd(probe_io_mix, probe_mem_mix, 1.0, _PROBE_SEED_BASE + probe_idx),
+            make_cmd(probe_io_mix, probe_mem_mix, 1.0, _PROBE_SEED_BASE + probe_idx, probe_io_mode),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
         probe_idx += 1
     
     if probe_frac > 0.0:
         procs.append(subprocess.Popen(
-            make_cmd(probe_io_mix, probe_mem_mix, probe_frac, _PROBE_SEED_BASE + probe_idx),
+            make_cmd(probe_io_mix, probe_mem_mix, probe_frac, _PROBE_SEED_BASE + probe_idx, probe_io_mode),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
 
     bg_tput = probe_tput = 0.0
@@ -117,6 +120,8 @@ def sweep(
     drop_pct:     float = 0.05,
     max_probes:   int   = 64,
     binary_steps: int   = 5,
+    bg_io_mode:   str   = "rand_write",
+    probe_io_mode: str   = "rand_write",
 ) -> dict:
     os.makedirs(tmp_dir, exist_ok=True)
     
@@ -136,7 +141,8 @@ def sweep(
 
     kw = dict(bg_procs=bg_procs, bg_io_mix=bg_io_mix, bg_mem_mix=bg_mem_mix, bg_intensity=bg_intensity,
               probe_io_mix=probe_io_mix, probe_mem_mix=probe_mem_mix,
-              duration=duration, tmp_dir=tmp_dir, worker_bin=worker_bin, tput_key=tput_key)
+              duration=duration, tmp_dir=tmp_dir, worker_bin=worker_bin, tput_key=tput_key, 
+              bg_io_mode=bg_io_mode, probe_io_mode=probe_io_mode)
 
     # ------------------------------------------------------------------
     # Phase 0: baseline
@@ -366,6 +372,8 @@ def main() -> None:
     parser.add_argument("--max-probes",   type=int,   default=64,    metavar="N")
     parser.add_argument("--tmp-dir",      default="/tmp/slack-meter", metavar="DIR")
     parser.add_argument("--worker-bin",   default=WORKER_BIN,        metavar="PATH")
+    parser.add_argument("--bg-io-mode",   default="rand_write",      help="Background IO Mode")
+    parser.add_argument("--probe-io-mode",default="rand_write",      help="Probe IO Mode")
     parser.add_argument("--output",       default=None,              metavar="FILE")
     parser.add_argument("--plot",         default=None,              metavar="FILE")
     args = parser.parse_args()
@@ -394,6 +402,8 @@ def main() -> None:
         worker_bin   = args.worker_bin,
         drop_pct     = args.drop_pct,
         max_probes   = args.max_probes,
+        bg_io_mode   = args.bg_io_mode,
+        probe_io_mode= args.probe_io_mode,
     )
 
     print("\n" + "=" * 60)
