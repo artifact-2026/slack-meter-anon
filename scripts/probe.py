@@ -47,10 +47,10 @@ def run_probe(
     bg_io_mix:    float,
     bg_mem_mix:   float,
     bg_intensity: float,
-    n_probe:      int,
+    n_probe_full: int,
+    probe_frac:   float,
     probe_io_mix: float,
     probe_mem_mix: float,
-    probe_intensity: float,
     duration:     int,
     tmp_dir:      str,
     worker_bin:   str,
@@ -71,9 +71,16 @@ def run_probe(
         procs.append(subprocess.Popen(
             make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
-    for i in range(n_probe):
+    probe_idx = 0
+    for i in range(n_probe_full):
         procs.append(subprocess.Popen(
-            make_cmd(probe_io_mix, probe_mem_mix, probe_intensity, _PROBE_SEED_BASE + i),
+            make_cmd(probe_io_mix, probe_mem_mix, 1.0, _PROBE_SEED_BASE + probe_idx),
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
+        probe_idx += 1
+    
+    if probe_frac > 0.0:
+        procs.append(subprocess.Popen(
+            make_cmd(probe_io_mix, probe_mem_mix, probe_frac, _PROBE_SEED_BASE + probe_idx),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
 
     bg_tput = probe_tput = 0.0
@@ -135,7 +142,7 @@ def sweep(
     # Phase 0: baseline
     # ------------------------------------------------------------------
     print("--- Phase 0: Baseline (background workers only) ---")
-    baseline_tput, _ = run_probe(n_probe=0, probe_intensity=0.0, **kw)
+    baseline_tput, _ = run_probe(n_probe_full=0, probe_frac=0.0, **kw)
     threshold = baseline_tput * (1.0 - drop_pct)
     print(f"  Baseline bg : {baseline_tput*_KT:,.3f} kTokens/s")
     print(f"  Threshold   : {threshold*_KT:,.3f} kTokens/s  (drop >= {drop_pct*100:.0f}%)")
@@ -151,7 +158,7 @@ def sweep(
     n_full = 0
 
     for n_probe in range(1, max_probes + 1):
-        bg_tput, probe_tput = run_probe(n_probe=n_probe, probe_intensity=1.0, **kw)
+        bg_tput, probe_tput = run_probe(n_probe_full=n_probe, probe_frac=0.0, **kw)
         interfered = bg_tput < threshold
         status = "INTERFERENCE" if interfered else "ok"
         print(f"  {n_probe:>7d}  {bg_tput*_KT:>12.3f}  {probe_tput*_KT:>12.3f}  {status}")
@@ -178,7 +185,7 @@ def sweep(
 
     for step in range(1, binary_steps + 1):
         mid = (low + high) / 2.0
-        bg_tput, probe_tput = run_probe(n_probe=n_full + 1, probe_intensity=mid, **kw)
+        bg_tput, probe_tput = run_probe(n_probe_full=n_full, probe_frac=mid, **kw)
         interfered = bg_tput < threshold
         status = "interferes" if interfered else "ok"
         print(f"  {step:>4d}  {mid:>9.3f}  {bg_tput*_KT:>12.3f}  {probe_tput*_KT:>12.3f}  {status}")
