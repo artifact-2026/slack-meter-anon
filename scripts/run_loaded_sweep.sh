@@ -190,7 +190,7 @@ else
             --io-mix    "$BG_IO_MIX"    \
             --mem-mix   "$BG_MEM_MIX"   \
             --intensity "$BG_INTENSITY" \
-            --duration  "$BG_DURATION"  \
+            --duration  "$DURATION"     \
             --tmp-dir   "$TMP_DIR"      \
             --seed      $((SEED + i))   \
             > "$OUTPUT_DIR/bg_worker_${i}.json" &
@@ -199,7 +199,19 @@ else
     log "Background worker PIDs: ${BG_PIDS[*]}"
     
     log "Running background workers ONLY for ${DURATION}s"
-    sleep "$DURATION"
+    for pid in "${BG_PIDS[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
+    BG_PIDS=()
+
+    # Calculate and print total throughput
+    TOTAL_TPUT=$(python3 -c '
+import json, sys, glob
+files = glob.glob(sys.argv[1] + "/bg_worker_*.json")
+total = sum(json.load(open(f)).get("throughput", 0.0) for f in files if open(f).read().strip())
+print(f"{total/1000.0:.3f}")
+' "$OUTPUT_DIR")
+    log "  => Total Background Throughput: ${TOTAL_TPUT} kOps/s"
 fi
 
 # ---------------------------------------------------------------------------

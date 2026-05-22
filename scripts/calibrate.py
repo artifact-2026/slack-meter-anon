@@ -124,7 +124,7 @@ def main():
                         help="The resource type to calibrate.")
     parser.add_argument("--duration",   type=int,   default=30,
                         metavar="S",   help="seconds per worker probe (default: 30)")
-    parser.add_argument("--tmp-dir",    default="/tmp/slack-meter-calibrate",
+    parser.add_argument("--tmp-dir",    default="/holly/slack-meter-calibrate",
                         metavar="DIR", help="scratch dir for ops")
     parser.add_argument("--worker-bin", default=WORKER_BIN,
                         metavar="PATH",help="path to the worker binary")
