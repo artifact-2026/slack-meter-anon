@@ -37,21 +37,44 @@ struct WorkloadResult {
 // ----------------------------------------------------------------------------
 // IoState – per-worker I/O state opened once before the main loop.
 //
-// Using O_DIRECT bypasses the page cache so writes go straight to the storage
-// stack.  O_DIRECT requires:
-//   - buffer address aligned to IO_BUF_SIZE (allocated via posix_memalign)
-//   - transfer size a multiple of IO_BUF_SIZE (always 4 KiB here)
-//   - file offset a multiple of IO_BUF_SIZE  (enforced in do_io_work)
+// The struct carries resources for all four I/O work variants so the scratch
+// file is opened and pre-allocated exactly once regardless of which variants
+// are exercised.
+//
+// fd (O_RDWR | O_DIRECT) is shared by:
+//   - do_io_work          – random 4 KiB O_DIRECT write  + fsync
+//   - do_io_read_work     – random 4 KiB O_DIRECT read
+//   - do_io_seq_write_work– sequential 128 KiB O_DIRECT write + fsync
+//
+// buf_fd (O_WRONLY, no O_DIRECT) is used by:
+//   - do_io_buf_write_work– sequential 4 KiB buffered write + fdatasync
+//
+// O_DIRECT constraints on fd:
+//   - buffer address aligned to IO_BUF_SIZE  (posix_memalign)
+//   - transfer size a multiple of IO_BUF_SIZE
+//   - file offset a multiple of IO_BUF_SIZE
 //
 // The file is pre-allocated with fallocate so every write is an overwrite of
 // an already-allocated extent — no metadata churn per op.
 // ----------------------------------------------------------------------------
 struct IoState {
-    int         fd        = -1;
-    void*       buf       = nullptr;  // posix_memalign'd, IO_BUF_SIZE aligned
-    size_t      file_size = 0;
+    // ---- shared file identity --------------------------------------------------
+    int         fd         = -1;      // O_RDWR | O_DIRECT
+    size_t      file_size  = 0;
     size_t      num_blocks = 0;       // file_size / IO_BUF_SIZE, for fast modulo
     std::string path;
+
+    // ---- random 4 KiB O_DIRECT write/read  (do_io_work / do_io_read_work) -----
+    void*       buf        = nullptr; // posix_memalign'd, IO_BUF_SIZE bytes
+
+    // ---- sequential 128 KiB O_DIRECT write  (do_io_seq_write_work) ------------
+    void*       seq_buf    = nullptr; // posix_memalign'd, SEQ_BUF_SIZE bytes
+    size_t      seq_cursor = 0;       // current write offset; advances by SEQ_BUF_SIZE
+
+    // ---- sequential 4 KiB buffered write  (do_io_buf_write_work) --------------
+    int         buf_fd         = -1;      // same file, opened without O_DIRECT
+    void*       buf_write_buf  = nullptr; // malloc'd, IO_BUF_SIZE bytes
+    size_t      buf_seq_cursor = 0;       // current write offset; advances by IO_BUF_SIZE
 };
 
 // Open (or create) the per-worker scratch file and return an initialised
@@ -63,7 +86,23 @@ IoState open_io_file(const std::string& tmp_dir,
 
 // Issue one 4 KiB O_DIRECT write to a random aligned offset within the file.
 // rng is the caller's existing generator — no extra state needed.
-void do_io_work(IoState& state, std::mt19937_64& rng);
+void do_io_work(IoState& st, std::mt19937_64& rng);
+
+// Issue one 4 KiB O_DIRECT read from a random aligned offset within the file.
+// Symmetric counterpart to do_io_work; measures random-read IOPS on the same
+// code path.  No fsync — reads have no durability component.
+void do_io_read_work(IoState& st, std::mt19937_64& rng);
+
+// Issue one 128 KiB O_DIRECT write at the current sequential cursor, then
+// fsync.  Advances st.seq_cursor by SEQ_BUF_SIZE on every call, wrapping at
+// file_size.  Measures sequential write throughput rather than random IOPS.
+void do_io_seq_write_work(IoState& st);
+
+// Issue one 4 KiB buffered (non-O_DIRECT) write at the current sequential
+// cursor via buf_fd, then fdatasync.  Advances st.buf_seq_cursor by IO_BUF_SIZE
+// on every call, wrapping at file_size.  Exercises the page-cache write path
+// and models database-WAL / log-structured write patterns.
+void do_io_buf_write_work(IoState& st);
 
 // Close fd, free the aligned buffer, and unlink the scratch file.
 void close_io_file(IoState& state);

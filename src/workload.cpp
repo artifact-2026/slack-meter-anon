@@ -18,6 +18,11 @@ static constexpr int TICK_MS = 250;
 // Linux filesystems and NVMe devices.
 static constexpr size_t IO_BUF_SIZE = 4096;
 
+// Transfer size for sequential O_DIRECT writes (128 KiB).
+// Large enough to shift the measurement from IOPS-bound to bandwidth-bound;
+// still a multiple of IO_BUF_SIZE so all O_DIRECT alignment constraints hold.
+static constexpr size_t SEQ_BUF_SIZE = 128ULL * 1024;
+
 // Iterations per CPU work unit.  Large enough to do real work per call,
 // small enough that the tick loop can count many completions per 250ms.
 static constexpr int CPU_ITERS = 18'400;
@@ -64,7 +69,8 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size) {
     buf_ptr[i] = init_rng();
   }
 
-  st.fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0600);
+  // O_RDWR so the same fd serves both do_io_work (writes) and do_io_read_work.
+  st.fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_DIRECT, 0600);
   if (st.fd < 0) {
     free(st.buf);
     st.buf = nullptr;
@@ -85,8 +91,39 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size) {
     }
   }
 
-  st.file_size = file_size;
+  st.file_size  = file_size;
   st.num_blocks = file_size / IO_BUF_SIZE;
+
+  // ---- sequential O_DIRECT write buffer (128 KiB, aligned) ------------------
+  // Initialise with random data so the first write isn't a trivially patterned
+  // buffer; subsequent writes stamp a counter into each sector (see
+  // do_io_seq_write_work), so deduplication is defeated without an RNG draw
+  // on the hot path.
+  if (posix_memalign(&st.seq_buf, IO_BUF_SIZE, SEQ_BUF_SIZE) == 0) {
+    uint64_t *p = static_cast<uint64_t *>(st.seq_buf);
+    for (size_t i = 0; i < SEQ_BUF_SIZE / sizeof(uint64_t); ++i)
+      p[i] = init_rng();
+  }
+  // seq_cursor starts at 0; do_io_seq_write_work advances it.
+
+  // ---- buffered write fd + buffer --------------------------------------------
+  // Open a second file description on the same file without O_DIRECT so the
+  // page cache is visible.  O_WRONLY suffices — do_io_buf_write_work never
+  // reads through this fd.
+  st.buf_fd = open(st.path.c_str(), O_WRONLY, 0600);
+  if (st.buf_fd >= 0) {
+    st.buf_write_buf = malloc(IO_BUF_SIZE);
+    if (st.buf_write_buf) {
+      uint64_t *p = static_cast<uint64_t *>(st.buf_write_buf);
+      for (size_t i = 0; i < IO_BUF_SIZE / sizeof(uint64_t); ++i)
+        p[i] = init_rng();
+    } else {
+      close(st.buf_fd);
+      st.buf_fd = -1;
+    }
+  }
+  // buf_seq_cursor starts at 0; do_io_buf_write_work advances it.
+
   return st;
 }
 
@@ -129,10 +166,111 @@ void close_io_file(IoState &st) {
     free(st.buf);
     st.buf = nullptr;
   }
+  if (st.seq_buf) {
+    free(st.seq_buf);
+    st.seq_buf = nullptr;
+  }
+  if (st.buf_fd >= 0) {
+    close(st.buf_fd);
+    st.buf_fd = -1;
+  }
+  if (st.buf_write_buf) {
+    free(st.buf_write_buf);
+    st.buf_write_buf = nullptr;
+  }
   if (!st.path.empty()) {
     unlink(st.path.c_str());
     st.path.clear();
   }
+}
+
+// ----------------------------------------------------------------------------
+// do_io_read_work – issue one 4 KiB O_DIRECT read from a random aligned
+// offset.
+//
+// Symmetric counterpart to do_io_work on the same fd (opened O_RDWR).
+// No fsync — reads have no durability component.  The read buffer is
+// intentionally reused across calls: we only care about the device latency
+// and throughput, not the content.
+// ----------------------------------------------------------------------------
+void do_io_read_work(IoState &st, std::mt19937_64 &rng) {
+  if (st.fd < 0 || !st.buf)
+    return;
+
+  const off_t offset = (off_t)((rng() % st.num_blocks) * IO_BUF_SIZE);
+  // Return value intentionally ignored: we measure throughput, not content.
+  [[maybe_unused]] ssize_t n = pread(st.fd, st.buf, IO_BUF_SIZE, offset);
+}
+
+// ----------------------------------------------------------------------------
+// do_io_seq_write_work – issue one 128 KiB O_DIRECT write at the current
+// sequential cursor, followed by fsync.
+//
+// The cursor advances by SEQ_BUF_SIZE on every call and wraps at file_size,
+// producing a linear scan that repeats.  A sequential access pattern removes
+// the seek component from the measurement and allows the storage controller to
+// exercise its full sequential-write pipeline, shifting the bottleneck from
+// IOPS to bandwidth.
+//
+// Deduplication is defeated by stamping st.seq_cursor (unique per call) into
+// the first word of each 512-byte sector.  This is cheaper than RNG draws and
+// produces verifiable data: the stamp is deterministic from the cursor value.
+// ----------------------------------------------------------------------------
+void do_io_seq_write_work(IoState &st) {
+  if (st.fd < 0 || !st.seq_buf)
+    return;
+
+  // Stamp each sector's leading word with (cursor | sector_index) so every
+  // 512-byte sector differs both within the buffer and across calls.
+  uint64_t *buf_ptr = static_cast<uint64_t *>(st.seq_buf);
+  static constexpr size_t WORDS_PER_SECTOR = 512 / sizeof(uint64_t);
+  static constexpr size_t SECTORS          = SEQ_BUF_SIZE / 512;
+  for (size_t i = 0; i < SECTORS; ++i)
+    buf_ptr[i * WORDS_PER_SECTOR] = st.seq_cursor | (uint64_t)i;
+
+  const off_t offset = (off_t)st.seq_cursor;
+  if (pwrite(st.fd, st.seq_buf, SEQ_BUF_SIZE, offset) == (ssize_t)SEQ_BUF_SIZE)
+    fsync(st.fd);
+
+  // Advance cursor; wrap so we stay within the pre-allocated region.
+  st.seq_cursor += SEQ_BUF_SIZE;
+  if (st.seq_cursor + SEQ_BUF_SIZE > st.file_size)
+    st.seq_cursor = 0;
+}
+
+// ----------------------------------------------------------------------------
+// do_io_buf_write_work – issue one 4 KiB buffered write at the current
+// sequential cursor via buf_fd, followed by fdatasync.
+//
+// buf_fd is opened without O_DIRECT, so writes go through the page cache
+// before being flushed to stable storage by fdatasync.  fdatasync is preferred
+// over fsync because it does not update file metadata timestamps, keeping the
+// measurement focused on data-path latency rather than metadata overhead.
+//
+// This variant models real application write patterns: database WALs,
+// append-only logs, and journaling filesystems all write through the page
+// cache and call fdatasync (or equivalent) for durability.
+// ----------------------------------------------------------------------------
+void do_io_buf_write_work(IoState &st) {
+  if (st.buf_fd < 0 || !st.buf_write_buf)
+    return;
+
+  // Stamp each sector's leading word with the cursor, same logic as
+  // do_io_seq_write_work, so deduplication is defeated deterministically.
+  uint64_t *buf_ptr = static_cast<uint64_t *>(st.buf_write_buf);
+  static constexpr size_t WORDS_PER_SECTOR = 512 / sizeof(uint64_t);
+  static constexpr size_t SECTORS          = IO_BUF_SIZE / 512;  // 8 sectors
+  for (size_t i = 0; i < SECTORS; ++i)
+    buf_ptr[i * WORDS_PER_SECTOR] = st.buf_seq_cursor | (uint64_t)i;
+
+  const off_t offset = (off_t)st.buf_seq_cursor;
+  if (pwrite(st.buf_fd, st.buf_write_buf, IO_BUF_SIZE, offset) == (ssize_t)IO_BUF_SIZE)
+    fdatasync(st.buf_fd);
+
+  // Advance cursor; wrap so we stay within the pre-allocated region.
+  st.buf_seq_cursor += IO_BUF_SIZE;
+  if (st.buf_seq_cursor + IO_BUF_SIZE > st.file_size)
+    st.buf_seq_cursor = 0;
 }
 
 // Multiplier used in the STREAM-style scale sweep.  Must be kept out of the
