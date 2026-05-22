@@ -34,7 +34,7 @@ services:
       MIN_PROCS: ${MIN_PROCS:-10}
       IO_MIX: ${IO_MIX:-0.3}
       INTENSITY: ${INTENSITY:-0.75}
-      DROP_PCT: ${DROP_PCT:-0.05}
+      DROP_PCT: ${DROP_PCT:-0.025}
     volumes:
       - ../results:/app/results
       - /holly/scratch:/holly/scratch
