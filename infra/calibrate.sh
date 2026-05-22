@@ -25,11 +25,13 @@ export BLOCK_DEVICE
 
 mkdir -p "$(dirname "$0")/../results"
 
-# Pass RESOURCE_TYPE to the container (defaults to 'io')
+# Pass variables to the container
 export RESOURCE_TYPE="${RESOURCE_TYPE:-io}"
+export IO_MODE="${IO_MODE:-rand_write}"
 
 # Run docker-compose overriding the entrypoint
 docker compose -f "$(dirname "$0")/docker-compose.yml" run --rm --build \
   -e RESOURCE_TYPE \
+  -e IO_MODE \
   --entrypoint python3 \
-  experiment /app/scripts/calibrate.py --resource-type "${RESOURCE_TYPE}" "$@"
+  experiment /app/scripts/calibrate.py --resource-type "${RESOURCE_TYPE}" --io-mode "${IO_MODE}" "$@"

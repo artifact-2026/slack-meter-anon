@@ -390,9 +390,18 @@ WorkloadResult run_workload(const WorkloadParams &params) {
     } else {
       const double n = dist(rng);
       if (n < params.io_mix) {
-        // I/O phase: keep issuing O_DIRECT pwrite ops until the tick closes.
+        // I/O phase: keep issuing ops until the tick closes.
         while (std::chrono::steady_clock::now() < tick_end) {
-          do_io_work(io_state, rng);
+          if (params.io_mode == "rand_read") {
+            do_io_read_work(io_state, rng);
+          } else if (params.io_mode == "seq_write") {
+            do_io_seq_write_work(io_state);
+          } else if (params.io_mode == "buf_write") {
+            do_io_buf_write_work(io_state);
+          } else {
+            // default to rand_write
+            do_io_work(io_state, rng);
+          }
           ++res.io_ops;
         }
       } else if (n < params.io_mix + params.mem_mix) {

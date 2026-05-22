@@ -33,6 +33,7 @@ int main(int argc, char* argv[]) {
     params.duration_secs = 30;
     params.tmp_dir       = "/tmp/slack-meter";
     params.seed          = 42;
+    params.io_mode       = "rand_write";
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--io-mix") == 0 && i + 1 < argc) {
@@ -47,6 +48,8 @@ int main(int argc, char* argv[]) {
             params.tmp_dir = argv[++i];
         } else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
             params.seed = (uint64_t)strtoull(argv[++i], nullptr, 10);
+        } else if (strcmp(argv[i], "--io-mode") == 0 && i + 1 < argc) {
+            params.io_mode = argv[++i];
         } else {
             usage(argv[0]);
             return 1;

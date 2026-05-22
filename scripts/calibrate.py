@@ -10,7 +10,7 @@ REPO_ROOT  = Path(__file__).parent.parent.resolve()
 WORKER_BIN = str(REPO_ROOT / "build" / "worker")
 
 def run_workers(num_full_workers, fractional_intensity=0.0, *,
-                resource_type, duration, tmp_dir, worker_bin):
+                resource_type, duration, tmp_dir, worker_bin, io_mode="rand_write"):
     """Spawns N full workers + 1 optional fractional worker and returns total resource throughput."""
     msg = f"Running {num_full_workers} worker(s)"
     if fractional_intensity > 0:
@@ -27,7 +27,8 @@ def run_workers(num_full_workers, fractional_intensity=0.0, *,
                 "--intensity", str(intensity),
                 "--duration",  str(duration),
                 "--tmp-dir",   tmp_dir,
-                "--seed",      str(seed)]
+                "--seed",      str(seed),
+                "--io-mode",   io_mode]
 
     processes = []
     for i in range(num_full_workers):
@@ -62,11 +63,11 @@ def run_workers(num_full_workers, fractional_intensity=0.0, *,
     return total_throughput
 
 
-def calibrate(*, resource_type, duration, tmp_dir, worker_bin):
+def calibrate(*, resource_type, duration, tmp_dir, worker_bin, io_mode="rand_write"):
     """Run the full capacity calibration and return a result dict."""
     os.makedirs(tmp_dir, exist_ok=True)
 
-    kw = dict(resource_type=resource_type, duration=duration, tmp_dir=tmp_dir, worker_bin=worker_bin)
+    kw = dict(resource_type=resource_type, duration=duration, tmp_dir=tmp_dir, worker_bin=worker_bin, io_mode=io_mode)
 
     history = []
     
@@ -131,6 +132,8 @@ def main():
                         metavar="DIR", help="scratch dir for ops")
     parser.add_argument("--worker-bin", default=WORKER_BIN,
                         metavar="PATH",help="path to the worker binary")
+    parser.add_argument("--io-mode",    default="rand_write",
+                        help="IO Mode: rand_write, rand_read, seq_write, buf_write")
     parser.add_argument("--output",     default=None,
                         metavar="FILE",help="write JSON result to this file")
     args = parser.parse_args()
@@ -148,7 +151,7 @@ def main():
     print("--------------------------------------------------")
 
     result = calibrate(resource_type=args.resource_type, duration=args.duration, 
-                       tmp_dir=args.tmp_dir, worker_bin=args.worker_bin)
+                       tmp_dir=args.tmp_dir, worker_bin=args.worker_bin, io_mode=args.io_mode)
 
     print("==================================================")
     print(" Calibration Complete ")

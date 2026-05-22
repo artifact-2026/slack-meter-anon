@@ -7,6 +7,13 @@ Automates running loaded sweeps to generate the data for the Utilization vs Slac
 It runs `run_loaded_sweep.sh` in a loop, randomizing the background workload mix
 and intensity. After each run, it extracts the baseline %util and the measured 
 IO slack, appends them to a CSV, and then plots the results against the naive expectation.
+
+To run:
+  $ python3 scripts/auto_scatter.py --capacity <value> --iterations <value>
+
+Example:
+  $ python3 scripts/auto_scatter.py --capacity 355.0 --iterations 20
+  $ ./scripts/auto_scatter.py --capacity 353.0 --iteration 10
 """
 
 import argparse
@@ -58,8 +65,10 @@ def main():
         # Ensure mem_mix + io_mix doesn't exceed 1.0 to be clean
         bg_mem_mix = round(random.uniform(0.0, 1.0 - bg_io_mix) if bg_io_mix < 1.0 else 0.0, 2)
         bg_intensity = round(random.uniform(0.1, 1.0), 2)
+        bg_io_mode = random.choice(["rand_write", "rand_read", "seq_write", "buf_write"])
+        probe_io_mode = random.choice(["rand_write", "rand_read", "seq_write", "buf_write"])
 
-        print(f"Running: BG_PROCS={bg_procs_val} | BG_IO_MIX={bg_io_mix} | BG_MEM_MIX={bg_mem_mix} | BG_INTENSITY={bg_intensity}")
+        print(f"Running: BG_PROCS={bg_procs_val} | BG_IO_MIX={bg_io_mix} | BG_MEM_MIX={bg_mem_mix} | BG_INTENSITY={bg_intensity} | BG_IO_MODE={bg_io_mode} | PROBE_IO_MODE={probe_io_mode}")
 
         env = os.environ.copy()
         env["SWEEP"] = "io"
@@ -67,6 +76,8 @@ def main():
         env["BG_IO_MIX"] = str(bg_io_mix)
         env["BG_MEM_MIX"] = str(bg_mem_mix)
         env["BG_INTENSITY"] = str(bg_intensity)
+        env["BG_IO_MODE"] = bg_io_mode
+        env["PROBE_IO_MODE"] = probe_io_mode
         # Reduce sweep duration slightly if you want to speed up tests, otherwise use defaults
         # env["DURATION"] = "20" 
 

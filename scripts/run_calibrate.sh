@@ -18,6 +18,11 @@ log "Building slack-meter..."
 cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -S "$REPO"
 cmake --build "$BUILD" --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
 
+IO_MODE="${IO_MODE:-rand_write}"
+
 # ---------------------------------------------------------------------------
-log "Running ${RESOURCE_TYPE:-io} calibration sweep..."
-python3 "$REPO/scripts/calibrate.py" --resource-type "${RESOURCE_TYPE:-io}" "$@"
+log "Running ${RESOURCE_TYPE:-io} calibration sweep (mode: ${IO_MODE})..."
+python3 "$REPO/scripts/calibrate.py" \
+    --resource-type "${RESOURCE_TYPE:-io}" \
+    --io-mode "${IO_MODE}" \
+    "$@"
