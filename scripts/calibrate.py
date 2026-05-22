@@ -68,18 +68,19 @@ def calibrate(*, resource_type, duration, tmp_dir, worker_bin):
 
     kw = dict(resource_type=resource_type, duration=duration, tmp_dir=tmp_dir, worker_bin=worker_bin)
 
-    peak_throughput = 0.0
-    optimal_workers = 0
-    plateau_strikes = 0
-
+    history = []
+    
     # Phase 1: linear sweep
     n = 1
-    while True:
-        throughput = run_workers(n, **kw)
+    plateau_strikes = 0
+    running_max = 0.0
 
-        if throughput > peak_throughput * 1.02:
-            peak_throughput = throughput
-            optimal_workers = n
+    while True:
+        throughput = run_workers(n, 0.0, **kw)
+        history.append((n, 0.0, throughput))
+
+        if throughput > running_max * 1.02:
+            running_max = throughput
             plateau_strikes = 0
         else:
             plateau_strikes += 1
@@ -92,29 +93,31 @@ def calibrate(*, resource_type, duration, tmp_dir, worker_bin):
             break
         n += 1
 
-    # Phase 2: binary search on fractional worker
-    print(f"\n--- Phase 2: Binary Search on Fractional Worker ---")
-    print(f"Searching for hidden capacity with {optimal_workers} full + 1 fractional worker")
+    # Find the n that gave the absolute peak during phase 1
+    best_p1 = max(history, key=lambda x: x[2])
+    best_n = best_p1[0]
+    
+    # We will probe fractional workers around the absolute peak.
+    # If best_n is 1, we can't do best_n - 1, so we just do best_n.
+    base_n = max(1, best_n - 1)
 
-    low, high = 0.0, 1.0
-    best_throughput = peak_throughput
-    best_intensity  = 0.0
+    # Phase 2: Fixed grid search on fractional worker
+    # Binary search fails on noisy plateaus; a fixed grid is much more robust.
+    print(f"\n--- Phase 2: Fractional Worker Grid Search ---")
+    print(f"Searching for hidden capacity with {base_n} full + fractional worker")
 
-    for _ in range(5):   # ~3 % precision
-        mid = (low + high) / 2.0
-        t = run_workers(optimal_workers, mid, **kw)
-        if t > best_throughput:
-            best_throughput = t
-            best_intensity  = mid
-            low = mid
-        else:
-            high = mid
+    for frac in [0.25, 0.50, 0.75]:
+        t = run_workers(base_n, frac, **kw)
+        history.append((base_n, frac, t))
 
+    # The true capacity is simply the absolute maximum throughput observed anywhere
+    absolute_best = max(history, key=lambda x: x[2])
+    
     return dict(
         resource           = resource_type,
-        peak_throughput    = best_throughput,
-        optimal_workers    = optimal_workers,
-        best_intensity     = best_intensity,
+        peak_throughput    = absolute_best[2],
+        optimal_workers    = absolute_best[0],
+        best_intensity     = absolute_best[1],
     )
 
 
