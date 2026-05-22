@@ -51,7 +51,8 @@ void do_cpu_work() {
 //   4. Allocate a posix_memalign'd buffer (O_DIRECT requires address
 //      alignment equal to the logical block size).
 // ----------------------------------------------------------------------------
-IoState open_io_file(const std::string &tmp_dir, size_t file_size) {
+IoState open_io_file(const std::string &tmp_dir, size_t file_size,
+                     const std::string &io_mode) {
   IoState st;
 
   // Unique filename per worker process — no coordination needed.
@@ -91,7 +92,7 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size) {
     }
   }
 
-  st.file_size  = file_size;
+  st.file_size = file_size;
   st.num_blocks = file_size / IO_BUF_SIZE;
 
   // ---- sequential O_DIRECT write buffer (128 KiB, aligned) ------------------
@@ -106,10 +107,29 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size) {
   }
   // seq_cursor starts at 0; do_io_seq_write_work advances it.
 
-  // ---- buffered write fd + buffer --------------------------------------------
-  // Open a second file description on the same file without O_DIRECT so the
-  // page cache is visible.  O_WRONLY suffices — do_io_buf_write_work never
-  // reads through this fd.
+  // If we are benchmarking reads, we MUST initialize the file with real data.
+  // Otherwise, reading unwritten extents via O_DIRECT is intercepted by the
+  // filesystem (e.g. ext4/xfs) which just memsets the buffer to zero and
+  // returns instantly without ever touching the NVMe device, yielding memory
+  // speeds.
+  if (io_mode == "rand_read" && st.seq_buf) {
+    uint64_t *p = static_cast<uint64_t *>(st.seq_buf);
+    static constexpr size_t WORDS_PER_SECTOR = 512 / sizeof(uint64_t);
+    static constexpr size_t SECTORS = SEQ_BUF_SIZE / 512;
+    for (off_t off = 0; off < (off_t)file_size; off += SEQ_BUF_SIZE) {
+      // Stamp the offset into each sector to defeat block-level deduplication
+      for (size_t i = 0; i < SECTORS; ++i) {
+        p[i * WORDS_PER_SECTOR] = (uint64_t)off | (uint64_t)i;
+      }
+      [[maybe_unused]] ssize_t ret = pwrite(st.fd, st.seq_buf, SEQ_BUF_SIZE, off);
+    }
+    fsync(st.fd);
+  }
+
+  // ---- buffered write fd + buffer
+  // -------------------------------------------- Open a second file description
+  // on the same file without O_DIRECT so the page cache is visible.  O_WRONLY
+  // suffices — do_io_buf_write_work never reads through this fd.
   st.buf_fd = open(st.path.c_str(), O_WRONLY, 0600);
   if (st.buf_fd >= 0) {
     st.buf_write_buf = malloc(IO_BUF_SIZE);
@@ -224,7 +244,7 @@ void do_io_seq_write_work(IoState &st) {
   // 512-byte sector differs both within the buffer and across calls.
   uint64_t *buf_ptr = static_cast<uint64_t *>(st.seq_buf);
   static constexpr size_t WORDS_PER_SECTOR = 512 / sizeof(uint64_t);
-  static constexpr size_t SECTORS          = SEQ_BUF_SIZE / 512;
+  static constexpr size_t SECTORS = SEQ_BUF_SIZE / 512;
   for (size_t i = 0; i < SECTORS; ++i)
     buf_ptr[i * WORDS_PER_SECTOR] = st.seq_cursor | (uint64_t)i;
 
@@ -259,12 +279,13 @@ void do_io_buf_write_work(IoState &st) {
   // do_io_seq_write_work, so deduplication is defeated deterministically.
   uint64_t *buf_ptr = static_cast<uint64_t *>(st.buf_write_buf);
   static constexpr size_t WORDS_PER_SECTOR = 512 / sizeof(uint64_t);
-  static constexpr size_t SECTORS          = IO_BUF_SIZE / 512;  // 8 sectors
+  static constexpr size_t SECTORS = IO_BUF_SIZE / 512; // 8 sectors
   for (size_t i = 0; i < SECTORS; ++i)
     buf_ptr[i * WORDS_PER_SECTOR] = st.buf_seq_cursor | (uint64_t)i;
 
   const off_t offset = (off_t)st.buf_seq_cursor;
-  if (pwrite(st.buf_fd, st.buf_write_buf, IO_BUF_SIZE, offset) == (ssize_t)IO_BUF_SIZE)
+  if (pwrite(st.buf_fd, st.buf_write_buf, IO_BUF_SIZE, offset) ==
+      (ssize_t)IO_BUF_SIZE)
     fdatasync(st.buf_fd);
 
   // Advance cursor; wrap so we stay within the pre-allocated region.
@@ -291,7 +312,7 @@ static constexpr double MEM_SCALAR = 3.0;
 // ----------------------------------------------------------------------------
 MemState open_mem_buf() {
   MemState st;
-  st.n   = MEM_BUF_DOUBLES;
+  st.n = MEM_BUF_DOUBLES;
   st.buf = static_cast<double *>(malloc(2 * st.n * sizeof(double)));
   if (!st.buf) {
     st.n = 0;
@@ -342,7 +363,7 @@ void do_mem_work(MemState &st) {
 void close_mem_buf(MemState &st) {
   free(st.buf);
   st.buf = nullptr;
-  st.n   = 0;
+  st.n = 0;
 }
 
 // ----------------------------------------------------------------------------
@@ -366,7 +387,7 @@ WorkloadResult run_workload(const WorkloadParams &params) {
   std::uniform_real_distribution<double> dist(0.0, 1.0);
 
   // Open the per-worker scratch file once for the duration of the run.
-  IoState io_state = open_io_file(params.tmp_dir);
+  IoState io_state = open_io_file(params.tmp_dir, IO_FILE_SIZE, params.io_mode);
   if (io_state.fd < 0) {
     fprintf(stderr, "[worker] open_io_file failed for dir %s\n",
             params.tmp_dir.c_str());

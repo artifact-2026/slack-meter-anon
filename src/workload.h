@@ -83,7 +83,8 @@ struct IoState {
 // Returns a state with fd == -1 on failure.
 static constexpr size_t IO_FILE_SIZE = 256ULL * 1024 * 1024;  // 256 MiB
 IoState open_io_file(const std::string& tmp_dir,
-                     size_t file_size = IO_FILE_SIZE);
+                     size_t file_size = IO_FILE_SIZE,
+                     const std::string& io_mode = "rand_write");
 
 // Issue one 4 KiB O_DIRECT write to a random aligned offset within the file.
 // rng is the caller's existing generator — no extra state needed.
