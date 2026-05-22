@@ -40,8 +40,8 @@
 #   MIN_PROCS=<n>        min processes before saturation early-stop (default: 4)
 #   IO_MIX=<float>       sweep baseline io_mix                      (default: 0.3)
 #   INTENSITY=<float>    sweep baseline intensity                   (default: 0.75)
-#   DROP_PCT=<float>     throughput-drop fraction for interference  (default: 0.05)
-#   SAT_EPSILON=<float>  min improvement ratio to keep sweeping     (default: 1.02)
+#   DROP_PCT=<float>     throughput-drop fraction for interference  (default: 0.025)
+#   SAT_EPSILON=<float>  min improvement ratio to keep sweeping     (default: 1.025)
 #
 #   Collectors / output
 #   --------------------
@@ -68,8 +68,8 @@ MAX_PROCS="${MAX_PROCS:-32}"
 MIN_PROCS="${MIN_PROCS:-4}"
 IO_MIX="${IO_MIX:-0.3}"
 INTENSITY="${INTENSITY:-0.75}"
-DROP_PCT="${DROP_PCT:-0.05}"
-SAT_EPSILON="${SAT_EPSILON:-1.02}"
+DROP_PCT="${DROP_PCT:-0.025}"
+SAT_EPSILON="${SAT_EPSILON:-1.025}"
 TMP_DIR="${TMP_DIR:-/holly/slack-meter-loaded-sweep}"
 INTERVAL="${INTERVAL:-1}"
 SEED="${SEED:-42}"
