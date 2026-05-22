@@ -145,7 +145,7 @@ def sweep(
     baseline_tput, _ = run_probe(n_probe_full=0, probe_frac=0.0, **kw)
     threshold = baseline_tput * (1.0 - drop_pct)
     print(f"  Baseline bg : {baseline_tput*_KT:,.3f} kTokens/s")
-    print(f"  Threshold   : {threshold*_KT:,.3f} kTokens/s  (drop >= {drop_pct*100:.0f}%)")
+    print(f"  Threshold   : {threshold*_KT:,.3f} kTokens/s  (drop >= {drop_pct*100:.1f}%)")
 
     # ------------------------------------------------------------------
     # Phase 1: linear sweep
