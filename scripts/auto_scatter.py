@@ -53,16 +53,17 @@ def main():
 
         # Randomize parameters to generate a good scatter
         # We want to explore different bottlenecks: pure IO, pure Memory, mixed, etc.
+        bg_procs_val = random.randint(1, args.bg_procs)
         bg_io_mix = round(random.uniform(0.1, 1.0), 2)
         # Ensure mem_mix + io_mix doesn't exceed 1.0 to be clean
         bg_mem_mix = round(random.uniform(0.0, 1.0 - bg_io_mix) if bg_io_mix < 1.0 else 0.0, 2)
         bg_intensity = round(random.uniform(0.1, 1.0), 2)
 
-        print(f"Running: BG_PROCS={args.bg_procs} | BG_IO_MIX={bg_io_mix} | BG_MEM_MIX={bg_mem_mix} | BG_INTENSITY={bg_intensity}")
+        print(f"Running: BG_PROCS={bg_procs_val} | BG_IO_MIX={bg_io_mix} | BG_MEM_MIX={bg_mem_mix} | BG_INTENSITY={bg_intensity}")
 
         env = os.environ.copy()
         env["SWEEP"] = "io"
-        env["BG_PROCS"] = str(args.bg_procs)
+        env["BG_PROCS"] = str(bg_procs_val)
         env["BG_IO_MIX"] = str(bg_io_mix)
         env["BG_MEM_MIX"] = str(bg_mem_mix)
         env["BG_INTENSITY"] = str(bg_intensity)
@@ -120,7 +121,7 @@ def main():
         # -------------------------------------------------------------------
         with open(out_csv, "a", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow([i, args.bg_procs, bg_io_mix, bg_mem_mix, bg_intensity, avg_util, slack_kt, slack_pct])
+            writer.writerow([i, bg_procs_val, bg_io_mix, bg_mem_mix, bg_intensity, avg_util, slack_kt, slack_pct])
 
         print(f"\n---> RESULT: Util = {avg_util:.1f}%, Slack = {slack_kt:.1f} kT/s ({slack_pct:.1f}% of {args.capacity})")
 
