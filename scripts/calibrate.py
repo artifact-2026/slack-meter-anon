@@ -156,11 +156,11 @@ def main():
     print("==================================================")
     print(" Calibration Complete ")
     print("==================================================")
-    print(f"Peak {args.resource_type.upper()} Throughput: {result['peak_throughput']:,.0f} ops/s")
+    print(f"Peak {args.resource_type.upper()} Throughput: {result['peak_throughput']:,.0f} tokens/s")
     print(f"Achieved at concurrency:    {result['optimal_workers']} full "
           f"+ 1 fractional ({result['best_intensity']:.2f})")
     k = result['peak_throughput'] / 1000.0
-    print(f"System Capacity:            {k:,.2f} kOps")
+    print(f"System Capacity:            {k:,.2f} kTokens/s")
     print("==================================================")
 
     if args.output:
