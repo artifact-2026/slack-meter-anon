@@ -25,8 +25,12 @@ log() { echo "[calibrate] $*"; }
 
 # ---------------------------------------------------------------------------
 log "Building slack-meter..."
-cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -S "$REPO"
-cmake --build "$BUILD" --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+if [[ -z "${SKIP_BUILD}" ]]; then
+    cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -S "$REPO"
+    cmake --build "$BUILD" --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+else
+    log "SKIP_BUILD is set; skipping cmake build."
+fi
 
 IO_MODE="${IO_MODE:-rand_write}"
 

@@ -36,6 +36,8 @@ def run_calibration(out_dir, duration, skip_calibrate):
         env = os.environ.copy()
         env["IO_MODE"] = mode
         env["RESOURCE_TYPE"] = "io"
+        # Ensure cmake is not invoked in runtime container
+        env["SKIP_BUILD"] = "1"
         
         cmd = ["bash", "scripts/run_calibrate.sh", "--duration", str(duration), "--output", str(cap_file)]
         subprocess.run(cmd, env=env, check=True)
