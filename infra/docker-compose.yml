@@ -17,15 +17,15 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile
-    cpus: "4.0"
-    mem_limit: "4g"
+    cpus: 4.0
+    mem_limit: 4g
     blkio_config:
       device_write_bps:
         - path: ${BLOCK_DEVICE:-/dev/sda}
-          rate: "225mb"
+          rate: 225000000
       device_read_bps:
         - path: ${BLOCK_DEVICE:-/dev/sda}
-          rate: "650mb"
+          rate: 650000000
     environment:
       PYTHONUNBUFFERED: "1"
       MODE: ${MODE:-full}
@@ -38,5 +38,5 @@ services:
       DROP_PCT: ${DROP_PCT:-0.025}
     volumes:
       - ../results:/app/results
-      - /holly/scratch:/holly/scratch
-      - /holly/slack-meter-calibrate:/holly/slack-meter-calibrate
+      - ./scratch:/holly/scratch
+      - ./slack-meter-calibrate:/holly/slack-meter-calibrate
