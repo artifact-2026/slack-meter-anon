@@ -16,7 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-IO_MODES = ["rand_write", "rand_read", "seq_write", "buf_write"]
+IO_MODES = ["rand_write", "rand_read", "seq_write", "seq_read"]
 
 def run_calibration(out_dir, duration, skip_calibrate):
     capacities = {}

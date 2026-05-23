@@ -9,6 +9,13 @@
 #include <thread>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#define fdatasync(fd) fsync(fd)
+#ifndef O_DIRECT
+#define O_DIRECT 0
+#endif
+#endif
+
 // How often the workload re-rolls its operation choice (milliseconds).
 static constexpr int TICK_MS = 250;
 
@@ -18,10 +25,10 @@ static constexpr int TICK_MS = 250;
 // Linux filesystems and NVMe devices.
 static constexpr size_t IO_BUF_SIZE = 4096;
 
-// Transfer size for sequential O_DIRECT writes (128 KiB).
-// Large enough to shift the measurement from IOPS-bound to bandwidth-bound;
-// still a multiple of IO_BUF_SIZE so all O_DIRECT alignment constraints hold.
-static constexpr size_t SEQ_BUF_SIZE = 128ULL * 1024;
+// Transfer size for sequential O_DIRECT writes (4 KiB).
+// Standardized to 4 KiB to ensure block size symmetry and fungibility
+// of the unit of measurement across all I/O workloads and probes.
+static constexpr size_t SEQ_BUF_SIZE = 4096;
 
 // Iterations per CPU work unit.  Large enough to do real work per call,
 // small enough that the tick loop can count many completions per 250ms.
@@ -77,10 +84,23 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size,
     st.buf = nullptr;
     return st;
   }
+#ifdef __APPLE__
+  fcntl(st.fd, F_NOCACHE, 1);
+#endif
 
   // Pre-allocate so writes are overwrites, not allocating appends.
   // fallocate is preferred (doesn't zero-fill on most filesystems);
   // ftruncate is the fallback for filesystems that don't support it.
+#ifdef __APPLE__
+  if (ftruncate(st.fd, (off_t)file_size) != 0) {
+    close(st.fd);
+    st.fd = -1;
+    free(st.buf);
+    st.buf = nullptr;
+    unlink(path);
+    return st;
+  }
+#else
   if (fallocate(st.fd, 0, 0, (off_t)file_size) != 0) {
     if (ftruncate(st.fd, (off_t)file_size) != 0) {
       close(st.fd);
@@ -91,11 +111,12 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size,
       return st;
     }
   }
+#endif
 
   st.file_size = file_size;
   st.num_blocks = file_size / IO_BUF_SIZE;
 
-  // ---- sequential O_DIRECT write buffer (128 KiB, aligned) ------------------
+  // ---- sequential O_DIRECT write buffer (4 KiB, aligned) ------------------
   // Initialise with random data so the first write isn't a trivially patterned
   // buffer; subsequent writes stamp a counter into each sector (see
   // do_io_seq_write_work), so deduplication is defeated without an RNG draw
@@ -112,7 +133,7 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size,
   // filesystem (e.g. ext4/xfs) which just memsets the buffer to zero and
   // returns instantly without ever touching the NVMe device, yielding memory
   // speeds.
-  if (io_mode == "rand_read" && st.seq_buf) {
+  if ((io_mode == "rand_read" || io_mode == "seq_read") && st.seq_buf) {
     uint64_t *p = static_cast<uint64_t *>(st.seq_buf);
     static constexpr size_t WORDS_PER_SECTOR = 512 / sizeof(uint64_t);
     static constexpr size_t SECTORS = SEQ_BUF_SIZE / 512;
@@ -223,7 +244,7 @@ void do_io_read_work(IoState &st, std::mt19937_64 &rng) {
 }
 
 // ----------------------------------------------------------------------------
-// do_io_seq_write_work – issue one 128 KiB O_DIRECT write at the current
+// do_io_seq_write_work – issue one 4 KiB O_DIRECT write at the current
 // sequential cursor, followed by fsync.
 //
 // The cursor advances by SEQ_BUF_SIZE on every call and wraps at file_size,
@@ -251,6 +272,23 @@ void do_io_seq_write_work(IoState &st) {
   const off_t offset = (off_t)st.seq_cursor;
   if (pwrite(st.fd, st.seq_buf, SEQ_BUF_SIZE, offset) == (ssize_t)SEQ_BUF_SIZE)
     fsync(st.fd);
+
+  // Advance cursor; wrap so we stay within the pre-allocated region.
+  st.seq_cursor += SEQ_BUF_SIZE;
+  if (st.seq_cursor + SEQ_BUF_SIZE > st.file_size)
+    st.seq_cursor = 0;
+}
+
+// ----------------------------------------------------------------------------
+// do_io_seq_read_work – issue one 4 KiB O_DIRECT read at the current
+// sequential cursor.
+// ----------------------------------------------------------------------------
+void do_io_seq_read_work(IoState &st) {
+  if (st.fd < 0 || !st.seq_buf)
+    return;
+
+  const off_t offset = (off_t)st.seq_cursor;
+  [[maybe_unused]] ssize_t n = pread(st.fd, st.seq_buf, SEQ_BUF_SIZE, offset);
 
   // Advance cursor; wrap so we stay within the pre-allocated region.
   st.seq_cursor += SEQ_BUF_SIZE;
@@ -417,6 +455,8 @@ WorkloadResult run_workload(const WorkloadParams &params) {
             do_io_read_work(io_state, rng);
           } else if (params.io_mode == "seq_write") {
             do_io_seq_write_work(io_state);
+          } else if (params.io_mode == "seq_read") {
+            do_io_seq_read_work(io_state);
           } else if (params.io_mode == "buf_write") {
             do_io_buf_write_work(io_state);
           } else {
