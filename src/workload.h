@@ -45,7 +45,8 @@ struct WorkloadResult {
 // fd (O_RDWR | O_DIRECT) is shared by:
 //   - do_io_work          – random 4 KiB O_DIRECT write  + fsync
 //   - do_io_read_work     – random 4 KiB O_DIRECT read
-//   - do_io_seq_write_work– sequential 128 KiB O_DIRECT write + fsync
+//   - do_io_seq_write_work– sequential 4 KiB O_DIRECT write + fsync
+//   - do_io_seq_read_work – sequential 4 KiB O_DIRECT read
 //
 // buf_fd (O_WRONLY, no O_DIRECT) is used by:
 //   - do_io_buf_write_work– sequential 4 KiB buffered write + fdatasync
@@ -68,7 +69,7 @@ struct IoState {
     // ---- random 4 KiB O_DIRECT write/read  (do_io_work / do_io_read_work) -----
     void*       buf        = nullptr; // posix_memalign'd, IO_BUF_SIZE bytes
 
-    // ---- sequential 128 KiB O_DIRECT write  (do_io_seq_write_work) ------------
+    // ---- sequential 4 KiB O_DIRECT write  (do_io_seq_write_work) ------------
     void*       seq_buf    = nullptr; // posix_memalign'd, SEQ_BUF_SIZE bytes
     size_t      seq_cursor = 0;       // current write offset; advances by SEQ_BUF_SIZE
 
@@ -95,10 +96,15 @@ void do_io_work(IoState& st, std::mt19937_64& rng);
 // code path.  No fsync — reads have no durability component.
 void do_io_read_work(IoState& st, std::mt19937_64& rng);
 
-// Issue one 128 KiB O_DIRECT write at the current sequential cursor, then
+// Issue one 4 KiB O_DIRECT write at the current sequential cursor, then
 // fsync.  Advances st.seq_cursor by SEQ_BUF_SIZE on every call, wrapping at
 // file_size.  Measures sequential write throughput rather than random IOPS.
 void do_io_seq_write_work(IoState& st);
+
+// Issue one 4 KiB O_DIRECT read at the current sequential cursor.
+// Advances st.seq_cursor by SEQ_BUF_SIZE on every call, wrapping at
+// file_size. Measures sequential read throughput.
+void do_io_seq_read_work(IoState& st);
 
 // Issue one 4 KiB buffered (non-O_DIRECT) write at the current sequential
 // cursor via buf_fd, then fdatasync.  Advances st.buf_seq_cursor by IO_BUF_SIZE
