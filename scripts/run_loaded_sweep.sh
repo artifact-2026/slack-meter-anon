@@ -63,6 +63,8 @@ WORKER="$BUILD/worker"
 
 # Sweep selector
 SWEEP="${SWEEP:-none}"
+SWEEP_UPPER=$(echo "$SWEEP" | tr '[:lower:]' '[:upper:]')
+DEVICE="${DEVICE:-}"
 
 # Sweep / shared params
 MODE="${MODE:-full}"
@@ -75,7 +77,13 @@ BG_IO_MODE="${BG_IO_MODE:-${IO_MODE:-rand_write}}"
 PROBE_IO_MODE="${PROBE_IO_MODE:-${IO_MODE:-rand_write}}"
 DROP_PCT="${DROP_PCT:-0.025}"
 SAT_EPSILON="${SAT_EPSILON:-1.025}"
-TMP_DIR="${TMP_DIR:-/holly/slack-meter-loaded-sweep}"
+if [[ -z "${TMP_DIR:-}" ]]; then
+    if [[ -d "/holly" && -w "/holly" ]]; then
+        TMP_DIR="/holly/slack-meter-loaded-sweep"
+    else
+        TMP_DIR="/tmp/slack-meter-loaded-sweep"
+    fi
+fi
 INTERVAL="${INTERVAL:-1}"
 SEED="${SEED:-42}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO/results/loaded_sweep}"

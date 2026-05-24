@@ -157,9 +157,9 @@ def main():
                 sys.stderr.write(f"============================================================\n")
                 sys.stderr.flush()
                 
-                # Also write to absolute volume mount path to ensure sync to host
+                # Also write to diagnostic log file in output directory
                 try:
-                    with open("/app/results/sweep_error.log", "w") as ef:
+                    with open(out_dir / "sweep_error.log", "w") as ef:
                         ef.write(f"Command: {e.cmd}\n")
                         ef.write(f"Exit code: {e.returncode}\n")
                         ef.write(f"STDOUT:\n{e.stdout}\n")

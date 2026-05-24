@@ -45,6 +45,7 @@ TMP_DIR="${TMP_DIR:-/tmp/slack-meter}"
 INTERVAL="${INTERVAL:-1}"
 SEED="${SEED:-42}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO/results/sweep_timeseries}"
+DEVICE="${DEVICE:-}"
 
 log() { echo "[sweep-ts] $*"; }
 
@@ -72,7 +73,7 @@ if [[ -z "${DEVICE:-}" ]]; then
     if command -v lsblk &>/dev/null; then
         _part=$(df "$TMP_DIR" 2>/dev/null | awk 'NR==2{print $1}')
         DEVICE=$(lsblk -no pkname "$_part" 2>/dev/null | head -1)
-        [[ -z "$DEVICE" ]] && DEVICE=$(basename "$_part")
+        [[ -z "${DEVICE:-}" ]] && DEVICE=$(basename "$_part")
     fi
     if [[ -z "${DEVICE:-}" ]]; then
         DEVICE=$(df "$TMP_DIR" 2>/dev/null \
