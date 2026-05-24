@@ -80,7 +80,8 @@ def calibrate(*, resource_type, duration, tmp_dir, worker_bin, io_mode="rand_wri
         throughput = run_workers(n, 0.0, **kw)
         history.append((n, 0.0, throughput))
 
-        if throughput > running_max * 1.025:
+        threshold = 1.0 + max(0.005, 0.1 / n)
+        if throughput > running_max * threshold:
             running_max = throughput
             plateau_strikes = 0
         else:
