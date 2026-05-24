@@ -55,6 +55,7 @@
 #   SKIP_BUILD=1         skip cmake build step
 
 set -euo pipefail
+set -x
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$REPO/build"
@@ -119,13 +120,19 @@ mkdir -p "$TMP_DIR" "$OUTPUT_DIR"
 if [[ -z "${DEVICE:-}" ]]; then
     if command -v lsblk &>/dev/null; then
         _part=$(df "$TMP_DIR" 2>/dev/null | awk 'NR==2{print $1}')
-        DEVICE=$(lsblk -no pkname "$_part" 2>/dev/null | head -1)
-        [[ -z "$DEVICE" ]] && DEVICE=$(basename "$_part")
+        if [[ -e "$_part" ]]; then
+            DEVICE=$(lsblk -no pkname "$_part" 2>/dev/null | head -1 || true)
+        fi
+        [[ -z "${DEVICE:-}" ]] && DEVICE=$(basename "$_part")
     fi
     if [[ -z "${DEVICE:-}" ]]; then
         DEVICE=$(df "$TMP_DIR" 2>/dev/null \
                    | awk 'NR==2{d=$1; gsub(/p?[0-9]+$/, "", d); gsub(/.*\//, "", d); print d}')
     fi
+fi
+if [[ -n "${DEVICE:-}" && ! -b "/dev/$DEVICE" && ! -d "/sys/block/$DEVICE" ]]; then
+    log "Device $DEVICE is not a valid block device; clearing DEVICE."
+    DEVICE=""
 fi
 log "Block device for iostat: ${DEVICE:-(all devices)}"
 
@@ -154,26 +161,30 @@ trap cleanup EXIT INT TERM
 # ---------------------------------------------------------------------------
 # Start collectors (no sample-count limit — run until killed)
 # ---------------------------------------------------------------------------
-log "Starting collectors (interval=${INTERVAL}s)..."
+VMSTAT_PID=""
+IOSTAT_PID=""
+if [[ "${DISABLE_COLLECTORS:-0}" != "1" ]]; then
+    log "Starting collectors (interval=${INTERVAL}s)..."
 
-vmstat -n "$INTERVAL" \
-    > "$OUTPUT_DIR/vmstat_raw.txt" 2>/dev/null &
-VMSTAT_PID=$!
+    vmstat -n "$INTERVAL" \
+        > "$OUTPUT_DIR/vmstat_raw.txt" 2>/dev/null &
+    VMSTAT_PID=$!
 
-IOSTAT_FLAGS="-x -d -y"
-if iostat -t 1 1 &>/dev/null 2>&1; then
-    IOSTAT_FLAGS="$IOSTAT_FLAGS -t"
+    IOSTAT_FLAGS="-x -d -y"
+    if iostat -t 1 1 &>/dev/null 2>&1; then
+        IOSTAT_FLAGS="$IOSTAT_FLAGS -t"
+    fi
+    # shellcheck disable=SC2086
+    iostat $IOSTAT_FLAGS "$INTERVAL" ${DEVICE:+"$DEVICE"} \
+        > "$OUTPUT_DIR/iostat_raw.txt" 2>/dev/null &
+    IOSTAT_PID=$!
 fi
-# shellcheck disable=SC2086
-iostat $IOSTAT_FLAGS "$INTERVAL" ${DEVICE:+"$DEVICE"} \
-    > "$OUTPUT_DIR/iostat_raw.txt" 2>/dev/null &
-IOSTAT_PID=$!
 
 # ---------------------------------------------------------------------------
 # Run sweep
 # ---------------------------------------------------------------------------
 if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
-    log "Starting ${SWEEP^^} sweep under load (probe.py)"
+    log "Starting $SWEEP_UPPER sweep under load (probe.py)"
     log "  bg: $BG_PROCS workers  io_mix=$BG_IO_MIX mem_mix=$BG_MEM_MIX intensity=$BG_INTENSITY  duration=${DURATION}s"
     python3 "$REPO/scripts/probe.py" \
         --probe-type   "$SWEEP"          \
@@ -233,35 +244,39 @@ for pid in "${BG_PIDS[@]+"${BG_PIDS[@]}"}"; do
 done
 BG_PIDS=()
 
-log "Stopping collectors..."
-sleep $(( INTERVAL * 2 ))
-kill "$VMSTAT_PID" 2>/dev/null || true
-kill "$IOSTAT_PID" 2>/dev/null || true
-wait "$VMSTAT_PID" 2>/dev/null || true
-wait "$IOSTAT_PID" 2>/dev/null || true
-VMSTAT_PID=""
-IOSTAT_PID=""
+if [[ "${DISABLE_COLLECTORS:-0}" != "1" ]]; then
+    log "Stopping collectors..."
+    sleep $(( INTERVAL * 2 ))
+    [[ -n "$VMSTAT_PID" ]] && kill "$VMSTAT_PID" 2>/dev/null || true
+    [[ -n "$IOSTAT_PID" ]] && kill "$IOSTAT_PID" 2>/dev/null || true
+    [[ -n "$VMSTAT_PID" ]] && wait "$VMSTAT_PID" 2>/dev/null || true
+    [[ -n "$IOSTAT_PID" ]] && wait "$IOSTAT_PID" 2>/dev/null || true
+    VMSTAT_PID=""
+    IOSTAT_PID=""
+fi
 
 # ---------------------------------------------------------------------------
 # Plot time series
 # ---------------------------------------------------------------------------
-log "Plotting time series..."
-python3 "$REPO/scripts/plot_timeseries.py" \
-    --output-dir "$OUTPUT_DIR" \
-    --device     "${DEVICE:-}" \
-    --interval   "$INTERVAL"   \
-    --nprocs     "$BG_PROCS"   \
-    --io-mix     "$BG_IO_MIX"  \
-    --intensity  "$BG_INTENSITY"
-
-
+if [[ "${DISABLE_COLLECTORS:-0}" != "1" ]]; then
+    log "Plotting time series..."
+    python3 "$REPO/scripts/plot_timeseries.py" \
+        --output-dir "$OUTPUT_DIR" \
+        --device     "${DEVICE:-}" \
+        --interval   "$INTERVAL"   \
+        --nprocs     "$BG_PROCS"   \
+        --io-mix     "$BG_IO_MIX"  \
+        --intensity  "$BG_INTENSITY"
+fi
 
 log "Done!"
 if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
-    log "  ${SWEEP^^} sweep result : $OUTPUT_DIR/sweep_${SWEEP}.json"
+    log "  $SWEEP_UPPER sweep result : $OUTPUT_DIR/sweep_${SWEEP}.json"
     log "  Slack figure     : $OUTPUT_DIR/slack_result_${SWEEP}.png"
 else
     log "  No sweep result  : (background only)"
 fi
-log "  Time-series plot : $OUTPUT_DIR/timeseries.png"
-log "  Raw collectors   : $OUTPUT_DIR/vmstat_raw.txt  $OUTPUT_DIR/iostat_raw.txt"
+if [[ "${DISABLE_COLLECTORS:-0}" != "1" ]]; then
+    log "  Time-series plot : $OUTPUT_DIR/timeseries.png"
+    log "  Raw collectors   : $OUTPUT_DIR/vmstat_raw.txt  $OUTPUT_DIR/iostat_raw.txt"
+fi
