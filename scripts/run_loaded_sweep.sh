@@ -42,8 +42,8 @@
 #   INTENSITY=<float>    sweep baseline intensity                   (default: 0.75)
 #   DROP_PCT=<float>     throughput-drop fraction for interference  (default: 0.025)
 #   SAT_EPSILON=<float>  min improvement ratio to keep sweeping     (default: 1.025)
-#   BG_IO_MODE=<mode>    values: rand_write | rand_read | seq_write | buf_write  (default: rand_write)
-#   PROBE_IO_MODE=<mode> values: rand_write | rand_read | seq_write | buf_write (default: rand_write)
+#   BG_IO_MODE=<mode>    values: rand_write | rand_read | seq_write | seq_read  (default: rand_write)
+#   PROBE_IO_MODE=<mode> values: rand_write | rand_read | seq_write | seq_read (default: rand_write)
 #
 #   Collectors / output
 #   --------------------

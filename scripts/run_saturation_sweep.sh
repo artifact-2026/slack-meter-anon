@@ -23,8 +23,8 @@
 #   SEED=<int>           base RNG seed                             (default: 42)
 #   OUTPUT_DIR=<path>    where to write CSVs, JSON, and plots      (default: results/sweep_timeseries)
 #   SKIP_BUILD=1         skip cmake build step
-#   BG_IO_MODE=<mode>    values: rand_write | rand_read | seq_write | buf_write  (default: rand_write)
-#   PROBE_IO_MODE=<mode> values: rand_write | rand_read | seq_write | buf_write (default: rand_write)
+#   BG_IO_MODE=<mode>    values: rand_write | rand_read | seq_write | seq_read  (default: rand_write)
+#   PROBE_IO_MODE=<mode> values: rand_write | rand_read | seq_write | seq_read (default: rand_write)
 
 
 set -euo pipefail

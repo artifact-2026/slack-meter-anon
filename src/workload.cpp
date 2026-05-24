@@ -147,24 +147,6 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size,
     fsync(st.fd);
   }
 
-  // ---- buffered write fd + buffer
-  // -------------------------------------------- Open a second file description
-  // on the same file without O_DIRECT so the page cache is visible.  O_WRONLY
-  // suffices — do_io_buf_write_work never reads through this fd.
-  st.buf_fd = open(st.path.c_str(), O_WRONLY, 0600);
-  if (st.buf_fd >= 0) {
-    st.buf_write_buf = malloc(IO_BUF_SIZE);
-    if (st.buf_write_buf) {
-      uint64_t *p = static_cast<uint64_t *>(st.buf_write_buf);
-      for (size_t i = 0; i < IO_BUF_SIZE / sizeof(uint64_t); ++i)
-        p[i] = init_rng();
-    } else {
-      close(st.buf_fd);
-      st.buf_fd = -1;
-    }
-  }
-  // buf_seq_cursor starts at 0; do_io_buf_write_work advances it.
-
   return st;
 }
 
@@ -210,14 +192,6 @@ void close_io_file(IoState &st) {
   if (st.seq_buf) {
     free(st.seq_buf);
     st.seq_buf = nullptr;
-  }
-  if (st.buf_fd >= 0) {
-    close(st.buf_fd);
-    st.buf_fd = -1;
-  }
-  if (st.buf_write_buf) {
-    free(st.buf_write_buf);
-    st.buf_write_buf = nullptr;
   }
   if (!st.path.empty()) {
     unlink(st.path.c_str());
@@ -296,41 +270,6 @@ void do_io_seq_read_work(IoState &st) {
     st.seq_cursor = 0;
 }
 
-// ----------------------------------------------------------------------------
-// do_io_buf_write_work – issue one 4 KiB buffered write at the current
-// sequential cursor via buf_fd, followed by fdatasync.
-//
-// buf_fd is opened without O_DIRECT, so writes go through the page cache
-// before being flushed to stable storage by fdatasync.  fdatasync is preferred
-// over fsync because it does not update file metadata timestamps, keeping the
-// measurement focused on data-path latency rather than metadata overhead.
-//
-// This variant models real application write patterns: database WALs,
-// append-only logs, and journaling filesystems all write through the page
-// cache and call fdatasync (or equivalent) for durability.
-// ----------------------------------------------------------------------------
-void do_io_buf_write_work(IoState &st) {
-  if (st.buf_fd < 0 || !st.buf_write_buf)
-    return;
-
-  // Stamp each sector's leading word with the cursor, same logic as
-  // do_io_seq_write_work, so deduplication is defeated deterministically.
-  uint64_t *buf_ptr = static_cast<uint64_t *>(st.buf_write_buf);
-  static constexpr size_t WORDS_PER_SECTOR = 512 / sizeof(uint64_t);
-  static constexpr size_t SECTORS = IO_BUF_SIZE / 512; // 8 sectors
-  for (size_t i = 0; i < SECTORS; ++i)
-    buf_ptr[i * WORDS_PER_SECTOR] = st.buf_seq_cursor | (uint64_t)i;
-
-  const off_t offset = (off_t)st.buf_seq_cursor;
-  if (pwrite(st.buf_fd, st.buf_write_buf, IO_BUF_SIZE, offset) ==
-      (ssize_t)IO_BUF_SIZE)
-    fdatasync(st.buf_fd);
-
-  // Advance cursor; wrap so we stay within the pre-allocated region.
-  st.buf_seq_cursor += IO_BUF_SIZE;
-  if (st.buf_seq_cursor + IO_BUF_SIZE > st.file_size)
-    st.buf_seq_cursor = 0;
-}
 
 // Multiplier used in the STREAM-style scale sweep.  Must be kept out of the
 // buffer initialisation path (different value) so the compiler cannot fold
@@ -457,8 +396,6 @@ WorkloadResult run_workload(const WorkloadParams &params) {
             do_io_seq_write_work(io_state);
           } else if (params.io_mode == "seq_read") {
             do_io_seq_read_work(io_state);
-          } else if (params.io_mode == "buf_write") {
-            do_io_buf_write_work(io_state);
           } else {
             // default to rand_write
             do_io_work(io_state, rng);

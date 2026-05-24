@@ -17,7 +17,7 @@ struct WorkloadParams {
     int         duration_secs; // how long to run
     std::string tmp_dir;       // scratch space for I/O ops
     uint64_t    seed;          // RNG seed (fixed for reproducibility)
-    std::string io_mode;       // rand_write, rand_read, seq_write, buf_write
+    std::string io_mode;       // rand_write, rand_read, seq_write, seq_read
 };
 
 // ----------------------------------------------------------------------------
@@ -42,15 +42,6 @@ struct WorkloadResult {
 // file is opened and pre-allocated exactly once regardless of which variants
 // are exercised.
 //
-// fd (O_RDWR | O_DIRECT) is shared by:
-//   - do_io_work          – random 4 KiB O_DIRECT write  + fsync
-//   - do_io_read_work     – random 4 KiB O_DIRECT read
-//   - do_io_seq_write_work– sequential 4 KiB O_DIRECT write + fsync
-//   - do_io_seq_read_work – sequential 4 KiB O_DIRECT read
-//
-// buf_fd (O_WRONLY, no O_DIRECT) is used by:
-//   - do_io_buf_write_work– sequential 4 KiB buffered write + fdatasync
-//
 // O_DIRECT constraints on fd:
 //   - buffer address aligned to IO_BUF_SIZE  (posix_memalign)
 //   - transfer size a multiple of IO_BUF_SIZE
@@ -69,14 +60,9 @@ struct IoState {
     // ---- random 4 KiB O_DIRECT write/read  (do_io_work / do_io_read_work) -----
     void*       buf        = nullptr; // posix_memalign'd, IO_BUF_SIZE bytes
 
-    // ---- sequential 4 KiB O_DIRECT write  (do_io_seq_write_work) ------------
+    // ---- sequential 4 KiB O_DIRECT write/read  (do_io_seq_write_work / do_io_seq_read_work) --
     void*       seq_buf    = nullptr; // posix_memalign'd, SEQ_BUF_SIZE bytes
-    size_t      seq_cursor = 0;       // current write offset; advances by SEQ_BUF_SIZE
-
-    // ---- sequential 4 KiB buffered write  (do_io_buf_write_work) --------------
-    int         buf_fd         = -1;      // same file, opened without O_DIRECT
-    void*       buf_write_buf  = nullptr; // malloc'd, IO_BUF_SIZE bytes
-    size_t      buf_seq_cursor = 0;       // current write offset; advances by IO_BUF_SIZE
+    size_t      seq_cursor = 0;       // current offset; advances by SEQ_BUF_SIZE
 };
 
 // Open (or create) the per-worker scratch file and return an initialised
@@ -105,12 +91,6 @@ void do_io_seq_write_work(IoState& st);
 // Advances st.seq_cursor by SEQ_BUF_SIZE on every call, wrapping at
 // file_size. Measures sequential read throughput.
 void do_io_seq_read_work(IoState& st);
-
-// Issue one 4 KiB buffered (non-O_DIRECT) write at the current sequential
-// cursor via buf_fd, then fdatasync.  Advances st.buf_seq_cursor by IO_BUF_SIZE
-// on every call, wrapping at file_size.  Exercises the page-cache write path
-// and models database-WAL / log-structured write patterns.
-void do_io_buf_write_work(IoState& st);
 
 // Close fd, free the aligned buffer, and unlink the scratch file.
 void close_io_file(IoState& state);
