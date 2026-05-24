@@ -65,8 +65,8 @@ def main():
         # Ensure mem_mix + io_mix doesn't exceed 1.0 to be clean
         bg_mem_mix = round(random.uniform(0.0, 1.0 - bg_io_mix) if bg_io_mix < 1.0 else 0.0, 2)
         bg_intensity = round(random.uniform(0.1, 1.0), 2)
-        bg_io_mode = random.choice(["rand_write", "rand_read", "seq_write", "buf_write"])
-        probe_io_mode = random.choice(["rand_write", "rand_read", "seq_write", "buf_write"])
+        bg_io_mode = random.choice(["rand_write", "rand_read", "seq_write", "seq_read"])
+        probe_io_mode = random.choice(["rand_write", "rand_read", "seq_write", "seq_read"])
 
         print(f"Running: BG_PROCS={bg_procs_val} | BG_IO_MIX={bg_io_mix} | BG_MEM_MIX={bg_mem_mix} | BG_INTENSITY={bg_intensity} | BG_IO_MODE={bg_io_mode} | PROBE_IO_MODE={probe_io_mode}")
 

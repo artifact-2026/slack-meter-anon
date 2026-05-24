@@ -135,7 +135,7 @@ def main():
     parser.add_argument("--worker-bin", default=WORKER_BIN,
                         metavar="PATH",help="path to the worker binary")
     parser.add_argument("--io-mode",    default="rand_write",
-                        help="IO Mode: rand_write, rand_read, seq_write, buf_write")
+                        help="IO Mode: rand_write, rand_read, seq_write, seq_read")
     parser.add_argument("--output",     default=None,
                         metavar="FILE",help="write JSON result to this file")
     args = parser.parse_args()

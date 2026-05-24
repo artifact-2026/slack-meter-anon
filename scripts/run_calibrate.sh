@@ -5,7 +5,7 @@
 #
 # Optional environment variables:
 #   RESOURCE_TYPE=<type>  cpu | io | ram | cache (default: io)
-#   IO_MODE=<mode>        rand_write | rand_read | seq_write | buf_write (default: rand_write)
+#   IO_MODE=<mode>        rand_write | rand_read | seq_write | seq_read (default: rand_write)
 #   INTENSITY=<float>     fraction of ticks that do real work (default: 0.75)
 #   DURATION=<secs>       worker run duration (default: 30)
 #   TMP_DIR=<path>        scratch dir for I/O ops (default: /tmp/slack-meter)
