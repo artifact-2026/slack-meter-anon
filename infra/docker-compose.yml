@@ -40,3 +40,4 @@ services:
       - ../results:/app/results
       - ./scratch:/holly/scratch
       - ./slack-meter-calibrate:/holly/slack-meter-calibrate
+      - ./slack-meter-loaded-sweep:/holly/slack-meter-loaded-sweep

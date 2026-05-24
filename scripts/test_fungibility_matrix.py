@@ -143,9 +143,32 @@ def main():
             env["PROBE_IO_MODE"] = probe_mode
             env["DURATION"] = str(args.duration)
             env["OUTPUT_DIR"] = str(sweep_dir)
+            env["DISABLE_COLLECTORS"] = "1"
             
             cmd = ["bash", "scripts/run_loaded_sweep.sh"]
-            subprocess.run(cmd, env=env, check=True, stdout=subprocess.DEVNULL) # Suppress noisy output for clarity
+            try:
+                subprocess.run(cmd, env=env, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                sys.stderr.write(f"\n============================================================\n")
+                sys.stderr.write(f"ERROR: run_loaded_sweep.sh failed with exit code {e.returncode}\n")
+                sys.stderr.write(f"Command: {e.cmd}\n")
+                sys.stderr.write(f"--- STDOUT ---\n{e.stdout}\n")
+                sys.stderr.write(f"--- STDERR ---\n{e.stderr}\n")
+                sys.stderr.write(f"============================================================\n")
+                sys.stderr.flush()
+                
+                # Also write to absolute volume mount path to ensure sync to host
+                try:
+                    with open("/app/results/sweep_error.log", "w") as ef:
+                        ef.write(f"Command: {e.cmd}\n")
+                        ef.write(f"Exit code: {e.returncode}\n")
+                        ef.write(f"STDOUT:\n{e.stdout}\n")
+                        ef.write(f"STDERR:\n{e.stderr}\n")
+                except Exception as write_err:
+                    sys.stderr.write(f"Failed to write log file: {write_err}\n")
+                    sys.stderr.flush()
+                
+                raise e
             
             sweep_file = sweep_dir / "sweep_io.json"
             if not sweep_file.exists():
