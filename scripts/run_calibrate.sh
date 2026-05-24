@@ -25,7 +25,7 @@ log() { echo "[calibrate] $*"; }
 
 # ---------------------------------------------------------------------------
 log "Building slack-meter..."
-if [[ -z "${SKIP_BUILD}" ]]; then
+if [[ -z "${SKIP_BUILD:-}" ]]; then
     cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -S "$REPO"
     cmake --build "$BUILD" --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
 else
