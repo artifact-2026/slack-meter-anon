@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from getpass import getuser
 
 IO_MODES = ["rand_write", "rand_read", "seq_write", "seq_read"]
 
@@ -106,9 +107,24 @@ def main():
     parser.add_argument("--skip-calibrate", action="store_true", help="Skip calibration if results exist")
     args = parser.parse_args()
 
-    out_dir = Path(args.out_dir)
+    out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / "fungibility_results.csv"
+
+    # Pre-flight: ensure no entries in out_dir are owned by a different user
+    # (can happen if a previous run was done under sudo, leaving root-owned files)
+    current_uid = os.getuid()
+    bad_paths = [
+        p for p in out_dir.rglob("*")
+        if p.stat().st_uid != current_uid
+    ]
+    if bad_paths:
+        print("\nERROR: The following paths in the output directory are owned by a different user")
+        print("       (likely created by a previous 'sudo' run). Fix with:\n")
+        print(f"  sudo chown -R {getuser()} {out_dir}\n")
+        for p in bad_paths:
+            print(f"  {p}")
+        sys.exit(1)
 
     capacities = run_calibration(out_dir, args.duration, args.skip_calibrate)
 
