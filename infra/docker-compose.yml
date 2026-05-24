@@ -21,10 +21,10 @@ services:
     mem_limit: 4g
     blkio_config:
       device_write_bps:
-        - path: ${BLOCK_DEVICE:-/dev/sda}
+        - path: ${BLOCK_DEVICE:-/dev/null}
           rate: 225000000
       device_read_bps:
-        - path: ${BLOCK_DEVICE:-/dev/sda}
+        - path: ${BLOCK_DEVICE:-/dev/null}
           rate: 650000000
     environment:
       PYTHONUNBUFFERED: "1"
