@@ -48,7 +48,7 @@ from typing import Optional
 REPO_ROOT   = Path(__file__).parent.parent.resolve()
 WORKER_BIN  = REPO_ROOT / "build" / "worker"
 DEFAULT_TMP = "/tmp/slack-meter"
-DEFAULT_DUR = 30
+DEFAULT_DUR = 60
 
 
 def _check_worker() -> None:
@@ -68,6 +68,7 @@ def spawn_workers(
     io_mix: float,
     intensity: float,
     duration: int,
+    warmup: int,
     tmp_dir: str,
     base_seed: int = 42,
     seed_offset: int = 0,
@@ -86,6 +87,7 @@ def spawn_workers(
                 "--io-mix",    str(io_mix),
                 "--intensity", str(intensity),
                 "--duration",  str(duration),
+                "--warmup",    str(warmup),
                 "--tmp-dir",   tmp_dir,
                 "--seed",      str(base_seed + seed_offset + i),
                 "--io-mode",   io_mode,
@@ -146,6 +148,7 @@ def run_saturation(
     max_procs: int             = 32,
     min_procs: int             = 4,
     duration: int              = DEFAULT_DUR,
+    warmup: int                = 5,
     tmp_dir: str               = DEFAULT_TMP,
     base_seed: int             = 42,
     sat_epsilon: float         = 1.02,
@@ -206,7 +209,7 @@ def run_saturation(
 
     for n in range(1, max_procs + 1):
         print(f"[saturation]  n={n} ...", end=" ", flush=True)
-        results = spawn_workers(n, io_mix, intensity, duration, tmp_dir,
+        results = spawn_workers(n, io_mix, intensity, duration, warmup, tmp_dir,
                                 base_seed=base_seed, seed_offset=n * 1000, io_mode=io_mode)
         if not results:
             print("(no results – skipping)")
@@ -260,6 +263,7 @@ def measure_slack(
     baseline_tput:      float,
     slack_resource:     str,   # "cpu" or "io"
     duration:           int   = DEFAULT_DUR,
+    warmup:             int   = 5,
     tmp_dir:            str   = DEFAULT_TMP,
     drop_pct:           float = 0.05,
     base_seed:          int   = 42,
@@ -326,6 +330,7 @@ def measure_slack(
                 "--io-mix",    str(io_mix),
                 "--intensity", str(intensity),
                 "--duration",  str(duration),
+                "--warmup",    str(warmup),
                 "--tmp-dir",   tmp_dir,
                 "--seed",      str(seed),
                 "--io-mode",   mode,
@@ -509,6 +514,8 @@ def main() -> None:
     parser.add_argument("--io-mix",     type=float, default=0.3,   metavar="F")
     parser.add_argument("--intensity",  type=float, default=0.75,  metavar="F")
     parser.add_argument("--duration",   type=int,   default=DEFAULT_DUR, metavar="S")
+    parser.add_argument("--warmup",     type=int,   default=5,           metavar="S",
+                        help="warmup duration in seconds (default: 5)")
     parser.add_argument("--max-procs",  type=int,   default=32,    metavar="N")
     parser.add_argument("--min-procs",  type=int,   default=4,     metavar="N",
                         help="Minimum processes to sweep before saturation early-stop (default: 4)")
@@ -540,6 +547,7 @@ def main() -> None:
             max_procs             = args.max_procs,
             min_procs             = args.min_procs,
             duration              = args.duration,
+            warmup                = args.warmup,
             tmp_dir               = args.tmp_dir,
             base_seed             = args.seed,
             sat_epsilon           = args.sat_epsilon,
@@ -561,6 +569,7 @@ def main() -> None:
                 baseline_tput      = base_tput,
                 slack_resource     = "cpu",
                 duration           = args.duration,
+                warmup             = args.warmup,
                 tmp_dir            = args.tmp_dir,
                 drop_pct           = args.drop_pct,
                 base_seed          = args.seed,
@@ -576,6 +585,7 @@ def main() -> None:
                 baseline_tput      = base_tput,
                 slack_resource     = "io",
                 duration           = args.duration,
+                warmup             = args.warmup,
                 tmp_dir            = args.tmp_dir,
                 drop_pct           = args.drop_pct,
                 base_seed          = args.seed,

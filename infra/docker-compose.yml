@@ -29,7 +29,8 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       MODE: ${MODE:-full}
-      DURATION: ${DURATION:-30}
+      DURATION: ${DURATION:-60}
+      WARMUP: ${WARMUP:-5}
       MAX_PROCS: ${MAX_PROCS:-32}
       MIN_PROCS: ${MIN_PROCS:-10}
       IO_MIX: ${IO_MIX:-0.3}

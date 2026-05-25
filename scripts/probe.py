@@ -52,6 +52,7 @@ def run_probe(
     probe_io_mix: float,
     probe_mem_mix: float,
     duration:     int,
+    warmup:       int,
     tmp_dir:      str,
     worker_bin:   str,
     tput_key:     str,
@@ -65,6 +66,7 @@ def run_probe(
                 "--mem-mix",   str(mem_mix),
                 "--intensity", str(intensity),
                 "--duration",  str(duration),
+                "--warmup",    str(warmup),
                 "--tmp-dir",   tmp_dir,
                 "--seed",      str(seed),
                 "--io-mode",   mode]
@@ -124,6 +126,7 @@ def sweep(
     bg_mem_mix:   float,
     bg_intensity: float,
     duration:     int,
+    warmup:       int,
     tmp_dir:      str,
     worker_bin:   str,
     drop_pct:     float = 0.05,
@@ -150,7 +153,7 @@ def sweep(
 
     kw = dict(bg_procs=bg_procs, bg_io_mix=bg_io_mix, bg_mem_mix=bg_mem_mix, bg_intensity=bg_intensity,
               probe_io_mix=probe_io_mix, probe_mem_mix=probe_mem_mix,
-              duration=duration, tmp_dir=tmp_dir, worker_bin=worker_bin, tput_key=tput_key, 
+              duration=duration, warmup=warmup, tmp_dir=tmp_dir, worker_bin=worker_bin, tput_key=tput_key, 
               bg_io_mode=bg_io_mode, probe_io_mode=probe_io_mode)
 
     # ------------------------------------------------------------------
@@ -376,7 +379,9 @@ def main() -> None:
     parser.add_argument("--bg-io-mix",    type=float, default=0.3,   metavar="F")
     parser.add_argument("--bg-mem-mix",   type=float, default=0.0,   metavar="F")
     parser.add_argument("--bg-intensity", type=float, default=0.75,  metavar="F")
-    parser.add_argument("--duration",     type=int,   default=30,    metavar="S")
+    parser.add_argument("--duration",     type=int,   default=60,    metavar="S")
+    parser.add_argument("--warmup",       type=int,   default=5,     metavar="S",
+                        help="warmup duration (seconds)")
     parser.add_argument("--drop-pct",     type=float, default=0.05,  metavar="F")
     parser.add_argument("--max-probes",   type=int,   default=64,    metavar="N")
     parser.add_argument("--tmp-dir",      default="/tmp/slack-meter", metavar="DIR")
@@ -407,6 +412,7 @@ def main() -> None:
         bg_mem_mix   = args.bg_mem_mix,
         bg_intensity = args.bg_intensity,
         duration     = args.duration,
+        warmup       = args.warmup,
         tmp_dir      = args.tmp_dir,
         worker_bin   = args.worker_bin,
         drop_pct     = args.drop_pct,
