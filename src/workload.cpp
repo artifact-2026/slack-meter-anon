@@ -6,9 +6,9 @@
 #include <cstring>
 #include <fcntl.h>
 #include <random>
+#include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
-#include <sys/stat.h>
 
 #ifdef __APPLE__
 #define fdatasync(fd) fsync(fd)
@@ -59,11 +59,10 @@ void do_cpu_work() {
 //   4. Allocate a posix_memalign'd buffer (O_DIRECT requires address
 //      alignment equal to the logical block size).
 // ----------------------------------------------------------------------------
-IoState open_io_file(const std::string &tmp_dir, size_t file_size,
-                     const std::string &io_mode) {
+IoState open_io_file(const std::string &tmp_dir, size_t file_size) {
   IoState st;
 
-  const char* worker_id_env = getenv("WORKER_ID");
+  const char *worker_id_env = getenv("WORKER_ID");
   int id = worker_id_env ? atoi(worker_id_env) : (int)getpid();
 
   // Unique filename per worker process/ID — no coordination needed.
@@ -72,7 +71,7 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size,
   st.path = path;
 
   // Check if we want to reuse the file, and if it exists with the correct size.
-  const char* reuse_env = getenv("REUSE_FILE");
+  const char *reuse_env = getenv("REUSE_FILE");
   bool reuse = reuse_env && strcmp(reuse_env, "1") == 0;
   bool file_exists_and_ok = false;
   if (reuse) {
@@ -151,9 +150,9 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size,
   }
   // seq_cursor starts at 0; do_io_seq_write_work advances it.
 
-  // Initialize the file with real data so that subsequent writes are overwrites,
-  // preventing filesystem dynamic allocation and metadata logging on the hot path,
-  // and ensuring reads do not return cached zeroes.
+  // Initialize the file with real data so that subsequent writes are
+  // overwrites, preventing filesystem dynamic allocation and metadata logging
+  // on the hot path, and ensuring reads do not return cached zeroes.
   if (!file_exists_and_ok && st.seq_buf) {
     uint64_t *p = static_cast<uint64_t *>(st.seq_buf);
     static constexpr size_t WORDS_PER_SECTOR = 512 / sizeof(uint64_t);
@@ -163,7 +162,8 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size,
       for (size_t i = 0; i < SECTORS; ++i) {
         p[i * WORDS_PER_SECTOR] = (uint64_t)off | (uint64_t)i;
       }
-      [[maybe_unused]] ssize_t ret = pwrite(st.fd, st.seq_buf, SEQ_BUF_SIZE, off);
+      [[maybe_unused]] ssize_t ret =
+          pwrite(st.fd, st.seq_buf, SEQ_BUF_SIZE, off);
     }
     fsync(st.fd);
   }
@@ -193,8 +193,10 @@ void do_io_work(IoState &st, std::mt19937_64 &rng) {
 
   // Random 4 KiB-aligned offset within the pre-allocated file.
   const off_t offset = (off_t)((rng() % st.num_blocks) * IO_BUF_SIZE);
-  if (pwrite(st.fd, st.buf, IO_BUF_SIZE, offset) == (ssize_t)IO_BUF_SIZE) {
-    fsync(st.fd);
+  ssize_t ret = pwrite(st.fd, st.buf, IO_BUF_SIZE, offset);
+  if (ret != (ssize_t)IO_BUF_SIZE) {
+    perror("pwrite");
+    abort();
   }
 }
 
@@ -215,7 +217,7 @@ void close_io_file(IoState &st) {
     st.seq_buf = nullptr;
   }
   if (!st.path.empty()) {
-    const char* reuse_env = getenv("REUSE_FILE");
+    const char *reuse_env = getenv("REUSE_FILE");
     bool reuse = reuse_env && strcmp(reuse_env, "1") == 0;
     if (!reuse) {
       unlink(st.path.c_str());
@@ -294,7 +296,6 @@ void do_io_seq_read_work(IoState &st) {
   if (st.seq_cursor + SEQ_BUF_SIZE > st.file_size)
     st.seq_cursor = 0;
 }
-
 
 // Multiplier used in the STREAM-style scale sweep.  Must be kept out of the
 // buffer initialisation path (different value) so the compiler cannot fold
@@ -389,7 +390,7 @@ WorkloadResult run_workload(const WorkloadParams &params) {
   std::uniform_real_distribution<double> dist(0.0, 1.0);
 
   // Open the per-worker scratch file once for the duration of the run.
-  IoState io_state = open_io_file(params.tmp_dir, IO_FILE_SIZE, params.io_mode);
+  IoState io_state = open_io_file(params.tmp_dir, IO_FILE_SIZE);
   if (io_state.fd < 0) {
     fprintf(stderr, "[worker] open_io_file failed for dir %s\n",
             params.tmp_dir.c_str());
@@ -400,7 +401,8 @@ WorkloadResult run_workload(const WorkloadParams &params) {
   WorkloadResult res{};
   const auto start = std::chrono::steady_clock::now();
   const auto warmup_deadline = start + std::chrono::seconds(params.warmup_secs);
-  const auto deadline = warmup_deadline + std::chrono::seconds(params.duration_secs);
+  const auto deadline =
+      warmup_deadline + std::chrono::seconds(params.duration_secs);
 
   auto measure_start = start;
   bool in_warmup = (params.warmup_secs > 0);
@@ -459,7 +461,8 @@ WorkloadResult run_workload(const WorkloadParams &params) {
   close_mem_buf(mem_state);
 
   const auto finish = std::chrono::steady_clock::now();
-  res.elapsed_secs = std::chrono::duration<double>(finish - measure_start).count();
+  res.elapsed_secs =
+      std::chrono::duration<double>(finish - measure_start).count();
   res.throughput = (res.cpu_ops + res.io_ops + res.mem_ops) / res.elapsed_secs;
   res.cpu_throughput = res.cpu_ops / res.elapsed_secs;
   res.io_throughput = res.io_ops / res.elapsed_secs;
