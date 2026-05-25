@@ -96,6 +96,20 @@ def plot_matrix(csv_path, out_plot):
     print(f"\n---> Success! Matrix plot saved to {out_plot}")
 
 
+def clean_scratch_files():
+    tmp_dir = Path("/holly/slack-meter-loaded-sweep")
+    if not (tmp_dir.exists() and os.access(tmp_dir, os.W_OK)):
+        tmp_dir = Path("/tmp/slack-meter-loaded-sweep")
+    
+    if tmp_dir.exists():
+        print(f"\nCleaning up scratch files in {tmp_dir}...")
+        for p in tmp_dir.glob("sm_io_*.dat"):
+            try:
+                p.unlink()
+            except Exception as e:
+                print(f"[Warning] Failed to delete {p}: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Test 4x4 Fungibility Matrix.")
     parser.add_argument("--bg-procs", type=int, default=8)
@@ -110,6 +124,9 @@ def main():
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / "fungibility_results.csv"
+
+    # Clean any stale scratch files from previous runs
+    clean_scratch_files()
 
     # Pre-flight: ensure no entries in out_dir are owned by a different user
     # (can happen if a previous run was done under sudo, leaving root-owned files)
@@ -210,6 +227,9 @@ def main():
     print(" Phase 3: Generate Plot")
     print("="*60)
     plot_matrix(csv_path, out_dir / "fungibility_plot.png")
+
+    # Final cleanup of scratch files
+    clean_scratch_files()
 
 if __name__ == "__main__":
     main()

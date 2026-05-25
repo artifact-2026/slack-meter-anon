@@ -33,10 +33,27 @@ else
 fi
 
 IO_MODE="${IO_MODE:-rand_write}"
+RESOURCE_TYPE="${RESOURCE_TYPE:-io}"
 
 # ---------------------------------------------------------------------------
-log "Running ${RESOURCE_TYPE:-io} calibration sweep (mode: ${IO_MODE})..."
+# Default --output to results/calibration/cap_<IO_MODE>.json unless the
+# caller already passed --output explicitly in "$@".
+# This ensures no calibration run is ever lost.
+# ---------------------------------------------------------------------------
+DEFAULT_OUT="$REPO/results/calibration/cap_${IO_MODE}.json"
+if [[ "$*" != *"--output"* ]]; then
+    mkdir -p "$(dirname "$DEFAULT_OUT")"
+    log "No --output given; defaulting to $DEFAULT_OUT"
+    OUTPUT_ARG="--output $DEFAULT_OUT"
+else
+    OUTPUT_ARG=""
+fi
+
+# ---------------------------------------------------------------------------
+log "Running ${RESOURCE_TYPE} calibration sweep (mode: ${IO_MODE})..."
+# shellcheck disable=SC2086
 python3 "$REPO/scripts/calibrate.py" \
-    --resource-type "${RESOURCE_TYPE:-io}" \
-    --io-mode "${IO_MODE}" \
+    --resource-type "$RESOURCE_TYPE" \
+    --io-mode "$IO_MODE" \
+    $OUTPUT_ARG \
     "$@"

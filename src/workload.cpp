@@ -8,6 +8,7 @@
 #include <random>
 #include <thread>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #ifdef __APPLE__
 #define fdatasync(fd) fsync(fd)
@@ -62,23 +63,43 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size,
                      const std::string &io_mode) {
   IoState st;
 
-  // Unique filename per worker process — no coordination needed.
+  const char* worker_id_env = getenv("WORKER_ID");
+  int id = worker_id_env ? atoi(worker_id_env) : (int)getpid();
+
+  // Unique filename per worker process/ID — no coordination needed.
   char path[512];
-  snprintf(path, sizeof(path), "%s/sm_io_%d.dat", tmp_dir.c_str(),
-           (int)getpid());
+  snprintf(path, sizeof(path), "%s/sm_io_%d.dat", tmp_dir.c_str(), id);
   st.path = path;
+
+  // Check if we want to reuse the file, and if it exists with the correct size.
+  const char* reuse_env = getenv("REUSE_FILE");
+  bool reuse = reuse_env && strcmp(reuse_env, "1") == 0;
+  bool file_exists_and_ok = false;
+  if (reuse) {
+    struct stat st_buf;
+    if (stat(path, &st_buf) == 0) {
+      if (st_buf.st_size == (off_t)file_size) {
+        file_exists_and_ok = true;
+      }
+    }
+  }
 
   // Aligned buffer required by O_DIRECT.
   if (posix_memalign(&st.buf, IO_BUF_SIZE, IO_BUF_SIZE) != 0)
     return st; // buf stays nullptr; caller checks fd < 0
-  std::mt19937_64 init_rng(1337 + getpid());
+  std::mt19937_64 init_rng(1337 + id);
   uint64_t *buf_ptr = static_cast<uint64_t *>(st.buf);
   for (size_t i = 0; i < IO_BUF_SIZE / sizeof(uint64_t); ++i) {
     buf_ptr[i] = init_rng();
   }
 
   // O_RDWR so the same fd serves both do_io_work (writes) and do_io_read_work.
-  st.fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_DIRECT, 0600);
+  if (file_exists_and_ok) {
+    st.fd = open(path, O_RDWR | O_DIRECT, 0600);
+  } else {
+    st.fd = open(path, O_RDWR | O_CREAT | O_TRUNC | O_DIRECT, 0600);
+  }
+
   if (st.fd < 0) {
     free(st.buf);
     st.buf = nullptr;
@@ -88,20 +109,11 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size,
   fcntl(st.fd, F_NOCACHE, 1);
 #endif
 
-  // Pre-allocate so writes are overwrites, not allocating appends.
-  // fallocate is preferred (doesn't zero-fill on most filesystems);
-  // ftruncate is the fallback for filesystems that don't support it.
+  if (!file_exists_and_ok) {
+    // Pre-allocate so writes are overwrites, not allocating appends.
+    // fallocate is preferred (doesn't zero-fill on most filesystems);
+    // ftruncate is the fallback for filesystems that don't support it.
 #ifdef __APPLE__
-  if (ftruncate(st.fd, (off_t)file_size) != 0) {
-    close(st.fd);
-    st.fd = -1;
-    free(st.buf);
-    st.buf = nullptr;
-    unlink(path);
-    return st;
-  }
-#else
-  if (fallocate(st.fd, 0, 0, (off_t)file_size) != 0) {
     if (ftruncate(st.fd, (off_t)file_size) != 0) {
       close(st.fd);
       st.fd = -1;
@@ -110,8 +122,19 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size,
       unlink(path);
       return st;
     }
-  }
+#else
+    if (fallocate(st.fd, 0, 0, (off_t)file_size) != 0) {
+      if (ftruncate(st.fd, (off_t)file_size) != 0) {
+        close(st.fd);
+        st.fd = -1;
+        free(st.buf);
+        st.buf = nullptr;
+        unlink(path);
+        return st;
+      }
+    }
 #endif
+  }
 
   st.file_size = file_size;
   st.num_blocks = file_size / IO_BUF_SIZE;
@@ -133,7 +156,7 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size,
   // filesystem (e.g. ext4/xfs) which just memsets the buffer to zero and
   // returns instantly without ever touching the NVMe device, yielding memory
   // speeds.
-  if ((io_mode == "rand_read" || io_mode == "seq_read") && st.seq_buf) {
+  if (!file_exists_and_ok && (io_mode == "rand_read" || io_mode == "seq_read") && st.seq_buf) {
     uint64_t *p = static_cast<uint64_t *>(st.seq_buf);
     static constexpr size_t WORDS_PER_SECTOR = 512 / sizeof(uint64_t);
     static constexpr size_t SECTORS = SEQ_BUF_SIZE / 512;
@@ -194,7 +217,11 @@ void close_io_file(IoState &st) {
     st.seq_buf = nullptr;
   }
   if (!st.path.empty()) {
-    unlink(st.path.c_str());
+    const char* reuse_env = getenv("REUSE_FILE");
+    bool reuse = reuse_env && strcmp(reuse_env, "1") == 0;
+    if (!reuse) {
+      unlink(st.path.c_str());
+    }
     st.path.clear();
   }
 }

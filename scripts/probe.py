@@ -71,20 +71,29 @@ def run_probe(
 
     procs: list[subprocess.Popen] = []
     for i in range(bg_procs):
+        env = os.environ.copy()
+        env["WORKER_ID"] = str(i)
+        env["REUSE_FILE"] = "1"
         procs.append(subprocess.Popen(
             make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i, bg_io_mode),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env))
     probe_idx = 0
     for i in range(n_probe_full):
+        env = os.environ.copy()
+        env["WORKER_ID"] = str(bg_procs + probe_idx)
+        env["REUSE_FILE"] = "1"
         procs.append(subprocess.Popen(
             make_cmd(probe_io_mix, probe_mem_mix, 1.0, _PROBE_SEED_BASE + probe_idx, probe_io_mode),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env))
         probe_idx += 1
     
     if probe_frac > 0.0:
+        env = os.environ.copy()
+        env["WORKER_ID"] = str(bg_procs + probe_idx)
+        env["REUSE_FILE"] = "1"
         procs.append(subprocess.Popen(
             make_cmd(probe_io_mix, probe_mem_mix, probe_frac, _PROBE_SEED_BASE + probe_idx, probe_io_mode),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL))
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env))
 
     bg_tput = probe_tput = 0.0
     for idx, p in enumerate(procs):
