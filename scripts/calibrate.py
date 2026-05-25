@@ -71,25 +71,35 @@ def calibrate(*, resource_type, duration, warmup, tmp_dir, worker_bin, io_mode="
     kw = dict(resource_type=resource_type, duration=duration, warmup=warmup, tmp_dir=tmp_dir, worker_bin=worker_bin, io_mode=io_mode)
 
     history = []
-    
-    # Phase 1: linear sweep
+
+    # Phase 1: linear sweep — stop only when throughput has clearly declined,
+    # not merely stopped growing.  A flat-top saturation curve (common with
+    # O_DIRECT writes without fsync) can plateau for many concurrency levels
+    # before the overhead of context-switching and cache eviction causes an
+    # actual drop.  Requiring three consecutive *declines* (not just
+    # sub-threshold gains) prevents stopping prematurely on a still-climbing
+    # curve.
     n = 1
-    plateau_strikes = 0
+    decline_strikes = 0
     running_max = 0.0
+    DECLINE_THRESHOLD = 0.98   # throughput must drop below 98% of peak to count as decline
+    DECLINE_REQUIRED  = 3      # three consecutive declines → stop
 
     while True:
         throughput = run_workers(n, 0.0, **kw)
         history.append((n, 0.0, throughput))
 
-        threshold = 1.0 + max(0.005, 0.1 / n)
-        if throughput > running_max * threshold:
+        if throughput > running_max:
             running_max = throughput
-            plateau_strikes = 0
+            decline_strikes = 0
+        elif throughput < running_max * DECLINE_THRESHOLD:
+            decline_strikes += 1
+        # flat (between 98% and 100% of peak): reset decline streak
         else:
-            plateau_strikes += 1
+            decline_strikes = 0
 
-        if plateau_strikes >= 3:
-            print("\nThroughput has plateaued. Stopping integer sweep.")
+        if decline_strikes >= DECLINE_REQUIRED:
+            print("\nThroughput has declined. Stopping integer sweep.")
             break
         if n >= 128:
             print("\nReached 128 processes. Stopping integer sweep.")
@@ -99,19 +109,17 @@ def calibrate(*, resource_type, duration, warmup, tmp_dir, worker_bin, io_mode="
     # Find the n that gave the absolute peak during phase 1
     best_p1 = max(history, key=lambda x: x[2])
     best_n = best_p1[0]
-    
-    # We will probe fractional workers around the absolute peak.
-    # If best_n is 1, we can't do best_n - 1, so we just do best_n.
-    base_n = max(1, best_n - 1)
 
-    # Phase 2: Fixed grid search on fractional worker
-    # Binary search fails on noisy plateaus; a fixed grid is much more robust.
+    # Phase 2: Fixed grid search on fractional worker.
+    # Probe on both sides of best_n to catch cases where the true peak sits
+    # between (best_n-1)+frac and best_n+frac.
     print(f"\n--- Phase 2: Fractional Worker Grid Search ---")
-    print(f"Searching for hidden capacity with {base_n} full + fractional worker")
-
-    for frac in [0.25, 0.50, 0.75]:
-        t = run_workers(base_n, frac, **kw)
-        history.append((base_n, frac, t))
+    base_candidates = [c for c in [best_n - 1, best_n] if c >= 1]
+    for base_n in base_candidates:
+        print(f"Searching for hidden capacity with {base_n} full + fractional worker")
+        for frac in [0.25, 0.50, 0.75]:
+            t = run_workers(base_n, frac, **kw)
+            history.append((base_n, frac, t))
 
     # The true capacity is simply the absolute maximum throughput observed anywhere
     absolute_best = max(history, key=lambda x: x[2])
