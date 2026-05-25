@@ -58,8 +58,9 @@ def run_probe(
     tput_key:     str,
     bg_io_mode:   str = "rand_write",
     probe_io_mode: str = "rand_write",
+    samples:      int = 3,
 ) -> tuple[float, float]:
-    """Run bg + probe workers concurrently; return (bg_tput, probe_tput) in ops/s."""
+    """Run bg + probe workers concurrently samples times; return median (bg_tput, probe_tput) in ops/s."""
     def make_cmd(io_mix: float, mem_mix: float, intensity: float, seed: int, mode: str) -> list[str]:
         return [worker_bin,
                 "--io-mix",    str(io_mix),
@@ -71,48 +72,55 @@ def run_probe(
                 "--seed",      str(seed),
                 "--io-mode",   mode]
 
-    procs: list[subprocess.Popen] = []
-    for i in range(bg_procs):
-        env = os.environ.copy()
-        env["WORKER_ID"] = str(i)
-        env["REUSE_FILE"] = "1"
-        procs.append(subprocess.Popen(
-            make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i, bg_io_mode),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env))
-    probe_idx = 0
-    for i in range(n_probe_full):
-        env = os.environ.copy()
-        env["WORKER_ID"] = str(bg_procs + probe_idx)
-        env["REUSE_FILE"] = "1"
-        procs.append(subprocess.Popen(
-            make_cmd(probe_io_mix, probe_mem_mix, 1.0, _PROBE_SEED_BASE + probe_idx, probe_io_mode),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env))
-        probe_idx += 1
-    
-    if probe_frac > 0.0:
-        env = os.environ.copy()
-        env["WORKER_ID"] = str(bg_procs + probe_idx)
-        env["REUSE_FILE"] = "1"
-        procs.append(subprocess.Popen(
-            make_cmd(probe_io_mix, probe_mem_mix, probe_frac, _PROBE_SEED_BASE + probe_idx, probe_io_mode),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env))
+    runs: list[tuple[float, float]] = []
 
-    bg_tput = probe_tput = 0.0
-    for idx, p in enumerate(procs):
-        stdout, _ = p.communicate()
-        if p.returncode != 0:
-            print(f"\n[probe] Worker {idx} exited non-zero — skipping sample")
-            continue
-        try:
-            data = json.loads(stdout.strip())
-            if idx < bg_procs:
-                bg_tput += data.get("throughput", 0.0)
-            else:
-                probe_tput += data.get(tput_key, 0.0)
-        except (json.JSONDecodeError, KeyError):
-            pass
+    for run_idx in range(samples):
+        procs: list[subprocess.Popen] = []
+        for i in range(bg_procs):
+            env = os.environ.copy()
+            env["WORKER_ID"] = str(i)
+            env["REUSE_FILE"] = "1"
+            procs.append(subprocess.Popen(
+                make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i + run_idx * 100, bg_io_mode),
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env))
+        probe_idx = 0
+        for i in range(n_probe_full):
+            env = os.environ.copy()
+            env["WORKER_ID"] = str(bg_procs + probe_idx)
+            env["REUSE_FILE"] = "1"
+            procs.append(subprocess.Popen(
+                make_cmd(probe_io_mix, probe_mem_mix, 1.0, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode),
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env))
+            probe_idx += 1
+        
+        if probe_frac > 0.0:
+            env = os.environ.copy()
+            env["WORKER_ID"] = str(bg_procs + probe_idx)
+            env["REUSE_FILE"] = "1"
+            procs.append(subprocess.Popen(
+                make_cmd(probe_io_mix, probe_mem_mix, probe_frac, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode),
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env))
 
-    return bg_tput, probe_tput
+        bg_tput = probe_tput = 0.0
+        for idx, p in enumerate(procs):
+            stdout, _ = p.communicate()
+            if p.returncode != 0:
+                print(f"\n[probe] Worker {idx} exited non-zero (run {run_idx}) — skipping sample")
+                continue
+            try:
+                data = json.loads(stdout.strip())
+                if idx < bg_procs:
+                    bg_tput += data.get("throughput", 0.0)
+                else:
+                    probe_tput += data.get(tput_key, 0.0)
+            except (json.JSONDecodeError, KeyError):
+                pass
+        runs.append((bg_tput, probe_tput))
+
+    # Sort runs by bg_tput to pick the median run
+    runs.sort(key=lambda x: x[0])
+    median_run = runs[len(runs) // 2]
+    return median_run[0], median_run[1]
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +142,7 @@ def sweep(
     binary_steps: int   = 5,
     bg_io_mode:   str   = "rand_write",
     probe_io_mode: str   = "rand_write",
+    samples:      int   = 3,
 ) -> dict:
     os.makedirs(tmp_dir, exist_ok=True)
     
@@ -154,7 +163,7 @@ def sweep(
     kw = dict(bg_procs=bg_procs, bg_io_mix=bg_io_mix, bg_mem_mix=bg_mem_mix, bg_intensity=bg_intensity,
               probe_io_mix=probe_io_mix, probe_mem_mix=probe_mem_mix,
               duration=duration, warmup=warmup, tmp_dir=tmp_dir, worker_bin=worker_bin, tput_key=tput_key, 
-              bg_io_mode=bg_io_mode, probe_io_mode=probe_io_mode)
+              bg_io_mode=bg_io_mode, probe_io_mode=probe_io_mode, samples=samples)
 
     # ------------------------------------------------------------------
     # Phase 0: baseline
@@ -383,6 +392,8 @@ def main() -> None:
     parser.add_argument("--warmup",       type=int,   default=5,     metavar="S",
                         help="warmup duration (seconds)")
     parser.add_argument("--drop-pct",     type=float, default=0.05,  metavar="F")
+    parser.add_argument("--samples",      type=int,   default=3,     metavar="N",
+                        help="number of samples per probe level (default: 3)")
     parser.add_argument("--max-probes",   type=int,   default=64,    metavar="N")
     parser.add_argument("--tmp-dir",      default="/tmp/slack-meter", metavar="DIR")
     parser.add_argument("--worker-bin",   default=WORKER_BIN,        metavar="PATH")
@@ -419,6 +430,7 @@ def main() -> None:
         max_probes   = args.max_probes,
         bg_io_mode   = args.bg_io_mode,
         probe_io_mode= args.probe_io_mode,
+        samples      = args.samples,
     )
 
     print("\n" + "=" * 60)

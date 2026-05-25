@@ -31,6 +31,7 @@
 #   Sweep — probe (probe.py)
 #   ----------------------------
 #   DURATION=<secs>      seconds per I/O probe                      (default: 30)
+#   SAMPLES=<n>          number of samples per probe level          (default: 3)
 #
 #   Sweep — slack (orchestrate.py)
 #   ------------------------------
@@ -40,7 +41,7 @@
 #   MIN_PROCS=<n>        min processes before saturation early-stop (default: 4)
 #   IO_MIX=<float>       sweep baseline io_mix                      (default: 0.3)
 #   INTENSITY=<float>    sweep baseline intensity                   (default: 0.75)
-#   DROP_PCT=<float>     throughput-drop fraction for interference  (default: 0.025)
+#   DROP_PCT=<float>     throughput-drop fraction for interference  (default: 0.05)
 #   SAT_EPSILON=<float>  min improvement ratio to keep sweeping     (default: 1.025)
 #   BG_IO_MODE=<mode>    values: rand_write | rand_read | seq_write | seq_read  (default: rand_write)
 #   PROBE_IO_MODE=<mode> values: rand_write | rand_read | seq_write | seq_read (default: rand_write)
@@ -74,7 +75,8 @@ IO_MIX="${IO_MIX:-0.3}"
 INTENSITY="${INTENSITY:-0.75}"
 BG_IO_MODE="${BG_IO_MODE:-${IO_MODE:-rand_write}}"
 PROBE_IO_MODE="${PROBE_IO_MODE:-${IO_MODE:-rand_write}}"
-DROP_PCT="${DROP_PCT:-0.025}"
+DROP_PCT="${DROP_PCT:-0.05}"
+SAMPLES="${SAMPLES:-3}"
 SAT_EPSILON="${SAT_EPSILON:-1.025}"
 if [[ -z "${TMP_DIR:-}" ]]; then
     if [[ -d "/holly" && -w "/holly" ]]; then
@@ -96,6 +98,10 @@ BG_INTENSITY="${BG_INTENSITY:-$INTENSITY}"
 # Parse command-line arguments to override environment variables/defaults
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --samples)
+            SAMPLES="$2"
+            shift 2
+            ;;
         --sweep)
             SWEEP="$2"
             shift 2
@@ -242,6 +248,7 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
         --duration     "$DURATION"       \
         --warmup       "$WARMUP"         \
         --drop-pct     "$DROP_PCT"       \
+        --samples      "$SAMPLES"        \
         --tmp-dir      "$TMP_DIR"        \
         --worker-bin   "$BUILD/worker"   \
         --bg-io-mode   "$BG_IO_MODE"     \
