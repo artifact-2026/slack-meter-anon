@@ -55,7 +55,6 @@
 #   SKIP_BUILD=1         skip cmake build step
 
 set -euo pipefail
-set -x
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$REPO/build"
@@ -133,7 +132,7 @@ SWEEP_UPPER=$(echo "$SWEEP" | tr '[:lower:]' '[:upper:]')
 # sweep.  It gets killed explicitly when the sweep finishes.
 BG_DURATION=86400   # 24 h ceiling; always killed before expiry
 
-log() { echo "[loaded-sweep] $*"; }
+log() { echo "[loaded-sweep] $*" >&2; }
 
 case "$SWEEP" in
     cpu|io|ram|none) ;;
