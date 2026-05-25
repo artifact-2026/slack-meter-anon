@@ -33,7 +33,8 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$REPO/build"
 
 MODE="${MODE:-saturation}"
-DURATION="${DURATION:-30}"
+DURATION="${DURATION:-60}"
+WARMUP="${WARMUP:-5}"
 MAX_PROCS="${MAX_PROCS:-32}"
 MIN_PROCS="${MIN_PROCS:-4}"
 IO_MIX="${IO_MIX:-0.3}"
@@ -121,6 +122,7 @@ log "Starting sweep: mode=$MODE  duration=${DURATION}s  max_procs=$MAX_PROCS  io
 python3 "$REPO/scripts/orchestrate.py" \
     --mode          "$MODE"        \
     --duration      "$DURATION"    \
+    --warmup        "$WARMUP"      \
     --max-procs     "$MAX_PROCS"   \
     --min-procs     "$MIN_PROCS"   \
     --io-mix        "$IO_MIX"      \

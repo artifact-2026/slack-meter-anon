@@ -10,7 +10,7 @@ REPO_ROOT  = Path(__file__).parent.parent.resolve()
 WORKER_BIN = str(REPO_ROOT / "build" / "worker")
 
 def run_workers(num_full_workers, fractional_intensity=0.0, *,
-                resource_type, duration, tmp_dir, worker_bin, io_mode="rand_write"):
+                resource_type, duration, warmup, tmp_dir, worker_bin, io_mode="rand_write"):
     """Spawns N full workers + 1 optional fractional worker and returns total resource throughput."""
     msg = f"Running {num_full_workers} worker(s)"
     if fractional_intensity > 0:
@@ -26,6 +26,7 @@ def run_workers(num_full_workers, fractional_intensity=0.0, *,
                 "--mem-mix", str(mem_mix),
                 "--intensity", str(intensity),
                 "--duration",  str(duration),
+                "--warmup",    str(warmup),
                 "--tmp-dir",   tmp_dir,
                 "--seed",      str(seed),
                 "--io-mode",   io_mode]
@@ -63,11 +64,11 @@ def run_workers(num_full_workers, fractional_intensity=0.0, *,
     return total_throughput
 
 
-def calibrate(*, resource_type, duration, tmp_dir, worker_bin, io_mode="rand_write"):
+def calibrate(*, resource_type, duration, warmup, tmp_dir, worker_bin, io_mode="rand_write"):
     """Run the full capacity calibration and return a result dict."""
     os.makedirs(tmp_dir, exist_ok=True)
 
-    kw = dict(resource_type=resource_type, duration=duration, tmp_dir=tmp_dir, worker_bin=worker_bin, io_mode=io_mode)
+    kw = dict(resource_type=resource_type, duration=duration, warmup=warmup, tmp_dir=tmp_dir, worker_bin=worker_bin, io_mode=io_mode)
 
     history = []
     
@@ -127,8 +128,10 @@ def main():
     parser = argparse.ArgumentParser(description="Calibrate maximum resource capacity.")
     parser.add_argument("--resource-type", choices=["cpu", "io", "ram"], required=True,
                         help="The resource type to calibrate.")
-    parser.add_argument("--duration",   type=int,   default=30,
-                        metavar="S",   help="seconds per worker probe (default: 30)")
+    parser.add_argument("--duration",   type=int,   default=60,
+                        metavar="S",   help="seconds per worker probe (default: 60)")
+    parser.add_argument("--warmup",     type=int,   default=5,
+                        metavar="S",   help="warmup duration in seconds (default: 5)")
     default_tmp = "/holly/slack-meter-calibrate" if os.path.isdir("/holly") and os.access("/holly", os.W_OK) else "/tmp/slack-meter-calibrate"
     parser.add_argument("--tmp-dir",    default=default_tmp,
                         metavar="DIR", help="scratch dir for ops")
@@ -152,7 +155,7 @@ def main():
     print(f"Tmp dir: {args.tmp_dir}")
     print("--------------------------------------------------")
 
-    result = calibrate(resource_type=args.resource_type, duration=args.duration, 
+    result = calibrate(resource_type=args.resource_type, duration=args.duration, warmup=args.warmup,
                        tmp_dir=args.tmp_dir, worker_bin=args.worker_bin, io_mode=args.io_mode)
 
     print("==================================================")

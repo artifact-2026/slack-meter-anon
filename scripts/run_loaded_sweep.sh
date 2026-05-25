@@ -66,7 +66,8 @@ DEVICE="${DEVICE:-}"
 
 # Sweep / shared params defaults
 MODE="${MODE:-full}"
-DURATION="${DURATION:-30}"
+DURATION="${DURATION:-60}"
+WARMUP="${WARMUP:-5}"
 MAX_PROCS="${MAX_PROCS:-32}"
 MIN_PROCS="${MIN_PROCS:-4}"
 IO_MIX="${IO_MIX:-0.3}"
@@ -113,6 +114,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --duration)
             DURATION="$2"
+            shift 2
+            ;;
+        --warmup)
+            WARMUP="$2"
             shift 2
             ;;
         --output-dir)
@@ -235,6 +240,7 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
         --bg-mem-mix   "$BG_MEM_MIX"     \
         --bg-intensity "$BG_INTENSITY"   \
         --duration     "$DURATION"       \
+        --warmup       "$WARMUP"         \
         --drop-pct     "$DROP_PCT"       \
         --tmp-dir      "$TMP_DIR"        \
         --worker-bin   "$BUILD/worker"   \
@@ -250,6 +256,7 @@ else
             --mem-mix   "$BG_MEM_MIX"   \
             --intensity "$BG_INTENSITY" \
             --duration  "$DURATION"     \
+            --warmup    "$WARMUP"       \
             --tmp-dir   "$TMP_DIR"      \
             --seed      $((SEED + i))   \
             --io-mode   "$BG_IO_MODE"   \

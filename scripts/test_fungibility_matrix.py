@@ -116,7 +116,7 @@ def main():
     parser.add_argument("--bg-io-mix", type=float, default=0.3)
     parser.add_argument("--bg-mem-mix", type=float, default=0.3)
     parser.add_argument("--bg-intensity", type=float, default=0.75)
-    parser.add_argument("--duration", type=int, default=30)
+    parser.add_argument("--duration", type=int, default=60)
     parser.add_argument("--out-dir", type=str, default="results/fungibility_matrix")
     parser.add_argument("--skip-calibrate", action="store_true", help="Skip calibration if results exist")
     args = parser.parse_args()

@@ -31,6 +31,7 @@ int main(int argc, char* argv[]) {
     params.mem_mix       = 0.0;
     params.intensity     = 0.75;
     params.duration_secs = 30;
+    params.warmup_secs   = 5;
     params.tmp_dir       = "/tmp/slack-meter";
     params.seed          = 42;
     params.io_mode       = "rand_write";
@@ -44,6 +45,8 @@ int main(int argc, char* argv[]) {
             params.intensity = atof(argv[++i]);
         } else if (strcmp(argv[i], "--duration") == 0 && i + 1 < argc) {
             params.duration_secs = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--warmup") == 0 && i + 1 < argc) {
+            params.warmup_secs = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--tmp-dir") == 0 && i + 1 < argc) {
             params.tmp_dir = argv[++i];
         } else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {

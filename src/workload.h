@@ -15,6 +15,7 @@ struct WorkloadParams {
     double      mem_mix;       // [0, 1]
     double      intensity;     // [0, 1]
     int         duration_secs; // how long to run
+    int         warmup_secs;   // warmup time in seconds
     std::string tmp_dir;       // scratch space for I/O ops
     uint64_t    seed;          // RNG seed (fixed for reproducibility)
     std::string io_mode;       // rand_write, rand_read, seq_write, seq_read

@@ -151,12 +151,10 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size,
   }
   // seq_cursor starts at 0; do_io_seq_write_work advances it.
 
-  // If we are benchmarking reads, we MUST initialize the file with real data.
-  // Otherwise, reading unwritten extents via O_DIRECT is intercepted by the
-  // filesystem (e.g. ext4/xfs) which just memsets the buffer to zero and
-  // returns instantly without ever touching the NVMe device, yielding memory
-  // speeds.
-  if (!file_exists_and_ok && (io_mode == "rand_read" || io_mode == "seq_read") && st.seq_buf) {
+  // Initialize the file with real data so that subsequent writes are overwrites,
+  // preventing filesystem dynamic allocation and metadata logging on the hot path,
+  // and ensuring reads do not return cached zeroes.
+  if (!file_exists_and_ok && st.seq_buf) {
     uint64_t *p = static_cast<uint64_t *>(st.seq_buf);
     static constexpr size_t WORDS_PER_SECTOR = 512 / sizeof(uint64_t);
     static constexpr size_t SECTORS = SEQ_BUF_SIZE / 512;
@@ -401,9 +399,21 @@ WorkloadResult run_workload(const WorkloadParams &params) {
 
   WorkloadResult res{};
   const auto start = std::chrono::steady_clock::now();
-  const auto deadline = start + std::chrono::seconds(params.duration_secs);
+  const auto warmup_deadline = start + std::chrono::seconds(params.warmup_secs);
+  const auto deadline = warmup_deadline + std::chrono::seconds(params.duration_secs);
+
+  auto measure_start = start;
+  bool in_warmup = (params.warmup_secs > 0);
 
   while (std::chrono::steady_clock::now() < deadline) {
+    if (in_warmup && std::chrono::steady_clock::now() >= warmup_deadline) {
+      res.cpu_ops = 0;
+      res.io_ops = 0;
+      res.mem_ops = 0;
+      res.sleep_ops = 0;
+      measure_start = std::chrono::steady_clock::now();
+      in_warmup = false;
+    }
     const auto tick_end =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(TICK_MS);
 
@@ -449,7 +459,7 @@ WorkloadResult run_workload(const WorkloadParams &params) {
   close_mem_buf(mem_state);
 
   const auto finish = std::chrono::steady_clock::now();
-  res.elapsed_secs = std::chrono::duration<double>(finish - start).count();
+  res.elapsed_secs = std::chrono::duration<double>(finish - measure_start).count();
   res.throughput = (res.cpu_ops + res.io_ops + res.mem_ops) / res.elapsed_secs;
   res.cpu_throughput = res.cpu_ops / res.elapsed_secs;
   res.io_throughput = res.io_ops / res.elapsed_secs;
