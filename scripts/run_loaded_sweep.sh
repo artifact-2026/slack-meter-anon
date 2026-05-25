@@ -61,12 +61,11 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$REPO/build"
 WORKER="$BUILD/worker"
 
-# Sweep selector
+# Sweep selector defaults
 SWEEP="${SWEEP:-none}"
-SWEEP_UPPER=$(echo "$SWEEP" | tr '[:lower:]' '[:upper:]')
 DEVICE="${DEVICE:-}"
 
-# Sweep / shared params
+# Sweep / shared params defaults
 MODE="${MODE:-full}"
 DURATION="${DURATION:-30}"
 MAX_PROCS="${MAX_PROCS:-32}"
@@ -88,11 +87,47 @@ INTERVAL="${INTERVAL:-1}"
 SEED="${SEED:-42}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO/results/loaded_sweep}"
 
-# Background worker params (default to the same workload as the sweep baseline)
+# Background worker params defaults
 BG_PROCS="${BG_PROCS:-4}"
 BG_IO_MIX="${BG_IO_MIX:-$IO_MIX}"
 BG_MEM_MIX="${BG_MEM_MIX:-0.0}"
 BG_INTENSITY="${BG_INTENSITY:-$INTENSITY}"
+
+# Parse command-line arguments to override environment variables/defaults
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --sweep)
+            SWEEP="$2"
+            shift 2
+            ;;
+        --probe-io-mode)
+            PROBE_IO_MODE="$2"
+            shift 2
+            ;;
+        --bg-io-mode)
+            BG_IO_MODE="$2"
+            shift 2
+            ;;
+        --bg-procs)
+            BG_PROCS="$2"
+            shift 2
+            ;;
+        --duration)
+            DURATION="$2"
+            shift 2
+            ;;
+        --output-dir)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        *)
+            echo "[loaded-sweep] ERROR: Unknown argument: $1" >&2
+            exit 1
+            ;;
+    esac
+done
+
+SWEEP_UPPER=$(echo "$SWEEP" | tr '[:lower:]' '[:upper:]')
 
 # A background worker runs for this many seconds — long enough to outlast any
 # sweep.  It gets killed explicitly when the sweep finishes.
