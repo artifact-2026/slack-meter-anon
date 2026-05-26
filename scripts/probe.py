@@ -61,9 +61,11 @@ def run_probe(
     samples:      int = 3,
     bg_queue_depth: int = 1,
     probe_queue_depth: int = 1,
+    bg_cpu_mode:  str = "cpu_int",
+    probe_cpu_mode: str = "cpu_int",
 ) -> tuple[float, float]:
     """Run bg + probe workers concurrently samples times; return median (bg_tput, probe_tput) in ops/s."""
-    def make_cmd(io_mix: float, mem_mix: float, intensity: float, seed: int, mode: str, qd: int) -> list[str]:
+    def make_cmd(io_mix: float, mem_mix: float, intensity: float, seed: int, mode: str, qd: int, cpu_mode: str) -> list[str]:
         return [worker_bin,
                 "--io-mix",    str(io_mix),
                 "--mem-mix",   str(mem_mix),
@@ -73,7 +75,8 @@ def run_probe(
                 "--tmp-dir",   tmp_dir,
                 "--seed",      str(seed),
                 "--io-mode",   mode,
-                "--queue-depth", str(qd)]
+                "--queue-depth", str(qd),
+                "--cpu-mode",  cpu_mode]
 
     runs: list[tuple[float, float]] = []
 
@@ -84,7 +87,7 @@ def run_probe(
             env["WORKER_ID"] = str(i)
             env["REUSE_FILE"] = "1"
             procs.append(subprocess.Popen(
-                make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i + run_idx * 100, bg_io_mode, bg_queue_depth),
+                make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i + run_idx * 100, bg_io_mode, bg_queue_depth, bg_cpu_mode),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
         probe_idx = 0
         for i in range(n_probe_full):
@@ -92,7 +95,7 @@ def run_probe(
             env["WORKER_ID"] = str(bg_procs + probe_idx)
             env["REUSE_FILE"] = "1"
             procs.append(subprocess.Popen(
-                make_cmd(probe_io_mix, probe_mem_mix, 1.0, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode, probe_queue_depth),
+                make_cmd(probe_io_mix, probe_mem_mix, 1.0, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode, probe_queue_depth, probe_cpu_mode),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
             probe_idx += 1
         
@@ -101,7 +104,7 @@ def run_probe(
             env["WORKER_ID"] = str(bg_procs + probe_idx)
             env["REUSE_FILE"] = "1"
             procs.append(subprocess.Popen(
-                make_cmd(probe_io_mix, probe_mem_mix, probe_frac, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode, probe_queue_depth),
+                make_cmd(probe_io_mix, probe_mem_mix, probe_frac, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode, probe_queue_depth, probe_cpu_mode),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
 
         bg_tput = probe_tput = 0.0
@@ -151,6 +154,8 @@ def sweep(
     bg_queue_depth: int = 1,
     probe_queue_depth: int = 1,
     interference_threshold_count: int = 3,
+    bg_cpu_mode:  str = "cpu_int",
+    probe_cpu_mode: str = "cpu_int",
 ) -> dict:
     os.makedirs(tmp_dir, exist_ok=True)
     
@@ -172,7 +177,9 @@ def sweep(
               probe_io_mix=probe_io_mix, probe_mem_mix=probe_mem_mix,
               duration=duration, warmup=warmup, tmp_dir=tmp_dir, worker_bin=worker_bin, tput_key=tput_key, 
               bg_io_mode=bg_io_mode, probe_io_mode=probe_io_mode, samples=samples,
-              bg_queue_depth=bg_queue_depth, probe_queue_depth=probe_queue_depth)
+              bg_queue_depth=bg_queue_depth, probe_queue_depth=probe_queue_depth,
+              interference_threshold_count=interference_threshold_count,
+              bg_cpu_mode=bg_cpu_mode, probe_cpu_mode=probe_cpu_mode)
 
     # ------------------------------------------------------------------
     # Phase 0: baseline
@@ -420,6 +427,9 @@ def main() -> None:
     parser.add_argument("--worker-bin",   default=WORKER_BIN,        metavar="PATH")
     parser.add_argument("--bg-io-mode",   default="rand_write",      help="Background IO Mode")
     parser.add_argument("--probe-io-mode",default="rand_write",      help="Probe IO Mode")
+    parser.add_argument("--cpu-mode",     default="cpu_int",         help="Default CPU Mode")
+    parser.add_argument("--bg-cpu-mode",  default=None,              help="Background CPU Mode (defaults to --cpu-mode)")
+    parser.add_argument("--probe-cpu-mode", default=None,            help="Probe CPU Mode (defaults to --cpu-mode)")
     parser.add_argument("--output",       default=None,              metavar="FILE")
     parser.add_argument("--plot",         default=None,              metavar="FILE")
     parser.add_argument("--queue-depth",  type=int,   default=1,     metavar="QD",
@@ -445,6 +455,8 @@ def main() -> None:
 
     bg_qd = args.bg_queue_depth if args.bg_queue_depth is not None else args.queue_depth
     probe_qd = args.probe_queue_depth if args.probe_queue_depth is not None else args.queue_depth
+    bg_cpu = args.bg_cpu_mode if args.bg_cpu_mode is not None else args.cpu_mode
+    probe_cpu = args.probe_cpu_mode if args.probe_cpu_mode is not None else args.cpu_mode
 
     result = sweep(
         probe_type   = args.probe_type,
@@ -464,6 +476,8 @@ def main() -> None:
         bg_queue_depth= bg_qd,
         probe_queue_depth= probe_qd,
         interference_threshold_count= args.interference_threshold_count,
+        bg_cpu_mode  = bg_cpu,
+        probe_cpu_mode = probe_cpu,
     )
 
     print("\n" + "=" * 60)
