@@ -199,7 +199,7 @@ IoState open_io_file(const std::string &tmp_dir,
           if (posix_memalign(&st.ring_bufs[i], IO_BUF_SIZE, st.ring_buf_size) != 0) {
             st.ring_bufs[i] = nullptr;
           } else {
-            if (io_mode == "rand_write") {
+            if (io_mode == "rand_write" || io_mode == "rand_rw" || io_mode == "rand_read_write") {
               std::mt19937_64 init_rng(1337 + id + i);
               uint64_t *buf_ptr = static_cast<uint64_t *>(st.ring_bufs[i]);
               for (size_t j = 0; j < st.ring_buf_size / sizeof(uint64_t); ++j) {
@@ -310,6 +310,14 @@ void do_io_read_work(IoState &st, std::mt19937_64 &rng) {
   const off_t offset = (off_t)((rng() % st.num_blocks) * IO_BUF_SIZE);
   // Return value intentionally ignored: we measure throughput, not content.
   [[maybe_unused]] ssize_t n = pread(st.fd, st.buf, IO_BUF_SIZE, offset);
+}
+
+void do_io_rw_work(IoState &st, std::mt19937_64 &rng) {
+  if (rng() % 2 == 0) {
+    do_io_read_work(st, rng);
+  } else {
+    do_io_work(st, rng);
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -518,6 +526,18 @@ WorkloadResult run_workload(const WorkloadParams &params) {
                 if (io_state.seq_cursor + SEQ_BUF_SIZE > io_state.file_size) {
                   io_state.seq_cursor = 0;
                 }
+              } else if (params.io_mode == "rand_rw" || params.io_mode == "rand_read_write") {
+                if (rng() % 2 == 0) {
+                  offset = (off_t)((rng() % io_state.num_blocks) * IO_BUF_SIZE);
+                  io_uring_prep_read(sqe, io_state.fd, buf, len, offset);
+                } else {
+                  uint64_t *buf_ptr = static_cast<uint64_t *>(buf);
+                  for (int i = 0; i < 8; ++i) {
+                    buf_ptr[i * (512 / sizeof(uint64_t))] = rng();
+                  }
+                  offset = (off_t)((rng() % io_state.num_blocks) * IO_BUF_SIZE);
+                  io_uring_prep_write(sqe, io_state.fd, buf, len, offset);
+                }
               } else {
                 // rand_write
                 uint64_t *buf_ptr = static_cast<uint64_t *>(buf);
@@ -578,6 +598,8 @@ WorkloadResult run_workload(const WorkloadParams &params) {
               do_io_read_64k_work(io_state, rng);
             } else if (params.io_mode == "seq_read") {
               do_io_seq_read_work(io_state);
+            } else if (params.io_mode == "rand_rw" || params.io_mode == "rand_read_write") {
+              do_io_rw_work(io_state, rng);
             } else {
               // default: rand_write
               do_io_work(io_state, rng);

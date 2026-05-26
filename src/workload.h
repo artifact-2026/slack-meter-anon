@@ -104,6 +104,9 @@ void do_io_work(IoState &st, std::mt19937_64 &rng);
 // code path.  No fsync — reads have no durability component.
 void do_io_read_work(IoState &st, std::mt19937_64 &rng);
 
+// Issue one 4 KiB O_DIRECT read or write (50/50 probability) to a random aligned offset.
+void do_io_rw_work(IoState &st, std::mt19937_64 &rng);
+
 // Issue one 64 KiB O_DIRECT read from a random 64 KiB-aligned offset (Probe C).
 // Tests whether slack is sensitive to operation granularity vs. 4 KiB
 // rand_read.
