@@ -5,7 +5,9 @@
 #
 # Optional environment variables:
 #   RESOURCE_TYPE=<type>  cpu | io | ram | cache (default: io)
-#   IO_MODE=<mode>        rand_write | rand_read | seq_write | seq_read (default: rand_write)
+#   IO_MODE=<mode>        rand_write | rand_read | rand_read_64k | seq_read (default: rand_write)
+#   STEP=<int>            Phase 1 concurrency step size (default: 1; use 4 for read modes)
+#   START_N=<int>         Start sweep at this concurrency (skip 1..N-1; optional)
 #   INTENSITY=<float>     fraction of ticks that do real work (default: 0.75)
 #   DURATION=<secs>       worker run duration (default: 30)
 #   TMP_DIR=<path>        scratch dir for I/O ops (default: /tmp/slack-meter)
@@ -49,11 +51,19 @@ else
     OUTPUT_ARG=""
 fi
 
+STEP="${STEP:-1}"
+START_N_ARG=""
+if [[ -n "${START_N:-}" ]]; then
+    START_N_ARG="--start-n ${START_N}"
+fi
+
 # ---------------------------------------------------------------------------
-log "Running ${RESOURCE_TYPE} calibration sweep (mode: ${IO_MODE})..."
+log "Running ${RESOURCE_TYPE} calibration sweep (mode: ${IO_MODE}, step: ${STEP}${START_N:+, start-n: ${START_N}})..."
 # shellcheck disable=SC2086
 python3 "$REPO/scripts/calibrate.py" \
     --resource-type "$RESOURCE_TYPE" \
     --io-mode "$IO_MODE" \
+    --step "$STEP" \
+    $START_N_ARG \
     $OUTPUT_ARG \
     "$@"

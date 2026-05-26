@@ -26,10 +26,16 @@ static constexpr int TICK_MS = 250;
 // Linux filesystems and NVMe devices.
 static constexpr size_t IO_BUF_SIZE = 4096;
 
-// Transfer size for sequential O_DIRECT writes (4 KiB).
-// Standardized to 4 KiB to ensure block size symmetry and fungibility
-// of the unit of measurement across all I/O workloads and probes.
-static constexpr size_t SEQ_BUF_SIZE = 4096;
+// Transfer size for the 64 KiB random-read probe (Probe C).
+// Must be a multiple of the logical block size (4 KiB).  Using 64 KiB shifts
+// the bottleneck from command-issue overhead toward bandwidth, allowing
+// comparison of IOPS-bound (4 KiB) vs. bandwidth-bound (64 KiB) probe paths.
+static constexpr size_t BUF_64K_SIZE = 65536;
+
+// Transfer size for sequential O_DIRECT reads (1 MiB, Probe D).
+// Large enough to saturate the NVMe's sequential-read bandwidth pipeline;
+// each op issues a single 1 MiB pread from the current cursor position.
+static constexpr size_t SEQ_BUF_SIZE = 1048576;
 
 // Iterations per CPU work unit.  Large enough to do real work per call,
 // small enough that the tick loop can count many completions per 250ms.
@@ -136,32 +142,32 @@ IoState open_io_file(const std::string &tmp_dir, size_t file_size) {
   }
 
   st.file_size = file_size;
-  st.num_blocks = file_size / IO_BUF_SIZE;
+  st.num_blocks      = file_size / IO_BUF_SIZE;
+  st.num_blocks_64k  = file_size / BUF_64K_SIZE;
 
-  // ---- sequential O_DIRECT write buffer (4 KiB, aligned) ------------------
-  // Initialise with random data so the first write isn't a trivially patterned
-  // buffer; subsequent writes stamp a counter into each sector (see
-  // do_io_seq_write_work), so deduplication is defeated without an RNG draw
-  // on the hot path.
+  // ---- 64 KiB aligned buffer for rand_read_64k (Probe C) -------------------
+  if (posix_memalign(&st.buf_64k, BUF_64K_SIZE, BUF_64K_SIZE) != 0)
+    st.buf_64k = nullptr;
+
+  // ---- 1 MiB sequential buffer for seq_read (Probe D) ----------------------
+  // Aligned to IO_BUF_SIZE (4 KiB); O_DIRECT only requires alignment to the
+  // logical block size, not to the transfer size.
   if (posix_memalign(&st.seq_buf, IO_BUF_SIZE, SEQ_BUF_SIZE) == 0) {
     uint64_t *p = static_cast<uint64_t *>(st.seq_buf);
     for (size_t i = 0; i < SEQ_BUF_SIZE / sizeof(uint64_t); ++i)
       p[i] = init_rng();
   }
-  // seq_cursor starts at 0; do_io_seq_write_work advances it.
 
-  // Initialize the file with real data so that subsequent writes are
-  // overwrites, preventing filesystem dynamic allocation and metadata logging
-  // on the hot path, and ensuring reads do not return cached zeroes.
+  // Pre-fill the file with non-zero data so reads never hit unwritten extents
+  // and so rand_write overwrites existing blocks (no metadata allocation on
+  // the hot path).  Writing in 1 MiB chunks is fast even for large files.
   if (!file_exists_and_ok && st.seq_buf) {
     uint64_t *p = static_cast<uint64_t *>(st.seq_buf);
     static constexpr size_t WORDS_PER_SECTOR = 512 / sizeof(uint64_t);
     static constexpr size_t SECTORS = SEQ_BUF_SIZE / 512;
     for (off_t off = 0; off < (off_t)file_size; off += SEQ_BUF_SIZE) {
-      // Stamp the offset into each sector to defeat block-level deduplication
-      for (size_t i = 0; i < SECTORS; ++i) {
+      for (size_t i = 0; i < SECTORS; ++i)
         p[i * WORDS_PER_SECTOR] = (uint64_t)off | (uint64_t)i;
-      }
       [[maybe_unused]] ssize_t ret =
           pwrite(st.fd, st.seq_buf, SEQ_BUF_SIZE, off);
     }
@@ -212,6 +218,10 @@ void close_io_file(IoState &st) {
     free(st.buf);
     st.buf = nullptr;
   }
+  if (st.buf_64k) {
+    free(st.buf_64k);
+    st.buf_64k = nullptr;
+  }
   if (st.seq_buf) {
     free(st.seq_buf);
     st.seq_buf = nullptr;
@@ -245,44 +255,30 @@ void do_io_read_work(IoState &st, std::mt19937_64 &rng) {
 }
 
 // ----------------------------------------------------------------------------
-// do_io_seq_write_work – issue one 4 KiB O_DIRECT write at the current
-// sequential cursor, followed by fsync.
+// do_io_read_64k_work – issue one 64 KiB O_DIRECT read from a random
+// 64 KiB-aligned offset (Probe C).
 //
-// The cursor advances by SEQ_BUF_SIZE on every call and wraps at file_size,
-// producing a linear scan that repeats.  A sequential access pattern removes
-// the seek component from the measurement and allows the storage controller to
-// exercise its full sequential-write pipeline, shifting the bottleneck from
-// IOPS to bandwidth.
-//
-// Deduplication is defeated by stamping st.seq_cursor (unique per call) into
-// the first word of each 512-byte sector.  This is cheaper than RNG draws and
-// produces verifiable data: the stamp is deterministic from the cursor value.
+// Compared to the 4 KiB rand_read, this shifts the bottleneck from command-
+// issue rate toward sequential-read bandwidth.  Using a larger transfer exposes
+// whether the device can saturate its internal read pipeline even when the
+// number of outstanding commands is lower.
 // ----------------------------------------------------------------------------
-void do_io_seq_write_work(IoState &st) {
-  if (st.fd < 0 || !st.seq_buf)
+void do_io_read_64k_work(IoState &st, std::mt19937_64 &rng) {
+  if (st.fd < 0 || !st.buf_64k || st.num_blocks_64k == 0)
     return;
 
-  // Stamp each sector's leading word with (cursor | sector_index) so every
-  // 512-byte sector differs both within the buffer and across calls.
-  uint64_t *buf_ptr = static_cast<uint64_t *>(st.seq_buf);
-  static constexpr size_t WORDS_PER_SECTOR = 512 / sizeof(uint64_t);
-  static constexpr size_t SECTORS = SEQ_BUF_SIZE / 512;
-  for (size_t i = 0; i < SECTORS; ++i)
-    buf_ptr[i * WORDS_PER_SECTOR] = st.seq_cursor | (uint64_t)i;
-
-  const off_t offset = (off_t)st.seq_cursor;
-  if (pwrite(st.fd, st.seq_buf, SEQ_BUF_SIZE, offset) == (ssize_t)SEQ_BUF_SIZE)
-    fsync(st.fd);
-
-  // Advance cursor; wrap so we stay within the pre-allocated region.
-  st.seq_cursor += SEQ_BUF_SIZE;
-  if (st.seq_cursor + SEQ_BUF_SIZE > st.file_size)
-    st.seq_cursor = 0;
+  const off_t offset = (off_t)((rng() % st.num_blocks_64k) * BUF_64K_SIZE);
+  [[maybe_unused]] ssize_t n = pread(st.fd, st.buf_64k, BUF_64K_SIZE, offset);
 }
 
 // ----------------------------------------------------------------------------
-// do_io_seq_read_work – issue one 4 KiB O_DIRECT read at the current
-// sequential cursor.
+// do_io_seq_read_work – issue one 1 MiB O_DIRECT sequential read at the
+// current cursor position (Probe D).
+//
+// Each call reads a contiguous 1 MiB chunk and advances the cursor, wrapping
+// at file_size.  The large transfer size saturates the NVMe's sequential-read
+// bandwidth pipeline; the bottleneck shifts entirely to read bandwidth rather
+// than command-issue latency or IOPS.
 // ----------------------------------------------------------------------------
 void do_io_seq_read_work(IoState &st) {
   if (st.fd < 0 || !st.seq_buf)
@@ -291,7 +287,6 @@ void do_io_seq_read_work(IoState &st) {
   const off_t offset = (off_t)st.seq_cursor;
   [[maybe_unused]] ssize_t n = pread(st.fd, st.seq_buf, SEQ_BUF_SIZE, offset);
 
-  // Advance cursor; wrap so we stay within the pre-allocated region.
   st.seq_cursor += SEQ_BUF_SIZE;
   if (st.seq_cursor + SEQ_BUF_SIZE > st.file_size)
     st.seq_cursor = 0;
@@ -431,12 +426,12 @@ WorkloadResult run_workload(const WorkloadParams &params) {
         while (std::chrono::steady_clock::now() < tick_end) {
           if (params.io_mode == "rand_read") {
             do_io_read_work(io_state, rng);
-          } else if (params.io_mode == "seq_write") {
-            do_io_seq_write_work(io_state);
+          } else if (params.io_mode == "rand_read_64k") {
+            do_io_read_64k_work(io_state, rng);
           } else if (params.io_mode == "seq_read") {
             do_io_seq_read_work(io_state);
           } else {
-            // default to rand_write
+            // default: rand_write
             do_io_work(io_state, rng);
           }
           ++res.io_ops;

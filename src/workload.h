@@ -19,7 +19,7 @@ struct WorkloadParams {
   int warmup_secs;     // warmup time in seconds
   std::string tmp_dir; // scratch space for I/O ops
   uint64_t seed;       // RNG seed (fixed for reproducibility)
-  std::string io_mode; // rand_write, rand_read, seq_write, seq_read
+  std::string io_mode; // rand_write | rand_read | rand_read_64k | seq_read
 };
 
 // ----------------------------------------------------------------------------
@@ -62,11 +62,14 @@ struct IoState {
   std::string path;
 
   // ---- random 4 KiB O_DIRECT write/read  (do_io_work / do_io_read_work) -----
-  void *buf = nullptr; // posix_memalign'd, IO_BUF_SIZE bytes
+  void *buf = nullptr; // posix_memalign'd, IO_BUF_SIZE (4 KiB) bytes
 
-  // ---- sequential 4 KiB O_DIRECT write/read  (do_io_seq_write_work /
-  // do_io_seq_read_work) --
-  void *seq_buf = nullptr; // posix_memalign'd, SEQ_BUF_SIZE bytes
+  // ---- random 64 KiB O_DIRECT read  (do_io_read_64k_work, Probe C) ----------
+  void *buf_64k = nullptr;   // posix_memalign'd, BUF_64K_SIZE (64 KiB) bytes
+  size_t num_blocks_64k = 0; // file_size / BUF_64K_SIZE, for fast modulo
+
+  // ---- sequential 1 MiB O_DIRECT read  (do_io_seq_read_work, Probe D) -------
+  void *seq_buf = nullptr; // posix_memalign'd, SEQ_BUF_SIZE (1 MiB) bytes
   size_t seq_cursor = 0;   // current offset; advances by SEQ_BUF_SIZE
 };
 
@@ -88,14 +91,13 @@ void do_io_work(IoState &st, std::mt19937_64 &rng);
 // code path.  No fsync — reads have no durability component.
 void do_io_read_work(IoState &st, std::mt19937_64 &rng);
 
-// Issue one 4 KiB O_DIRECT write at the current sequential cursor, then
-// fsync.  Advances st.seq_cursor by SEQ_BUF_SIZE on every call, wrapping at
-// file_size.  Measures sequential write throughput rather than random IOPS.
-void do_io_seq_write_work(IoState &st);
+// Issue one 64 KiB O_DIRECT read from a random 64 KiB-aligned offset (Probe C).
+// Tests whether slack is sensitive to operation granularity vs. 4 KiB rand_read.
+void do_io_read_64k_work(IoState &st, std::mt19937_64 &rng);
 
-// Issue one 4 KiB O_DIRECT read at the current sequential cursor.
-// Advances st.seq_cursor by SEQ_BUF_SIZE on every call, wrapping at
-// file_size. Measures sequential read throughput.
+// Issue one 1 MiB O_DIRECT sequential read at the current cursor (Probe D).
+// Advances st.seq_cursor by SEQ_BUF_SIZE on every call, wrapping at file_size.
+// Saturates NVMe sequential-read bandwidth rather than random IOPS.
 void do_io_seq_read_work(IoState &st);
 
 // Close fd, free the aligned buffer, and unlink the scratch file.
