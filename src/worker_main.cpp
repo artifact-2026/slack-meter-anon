@@ -21,7 +21,8 @@
 static void usage(const char* prog) {
     fprintf(stderr,
         "Usage: %s [--io-mix <float>] [--mem-mix <float>] [--intensity <float>]\n"
-        "          [--duration <secs>] [--tmp-dir <path>]\n",
+        "          [--duration <secs>] [--tmp-dir <path>] [--io-mode <mode>]\n"
+        "          [--queue-depth <depth>]\n",
         prog);
 }
 
@@ -35,6 +36,7 @@ int main(int argc, char* argv[]) {
     params.tmp_dir       = "/tmp/slack-meter";
     params.seed          = 42;
     params.io_mode       = "rand_write";
+    params.queue_depth   = 1;
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--io-mix") == 0 && i + 1 < argc) {
@@ -53,11 +55,19 @@ int main(int argc, char* argv[]) {
             params.seed = (uint64_t)strtoull(argv[++i], nullptr, 10);
         } else if (strcmp(argv[i], "--io-mode") == 0 && i + 1 < argc) {
             params.io_mode = argv[++i];
+        } else if ((strcmp(argv[i], "--queue-depth") == 0 || strcmp(argv[i], "--qd") == 0) && i + 1 < argc) {
+            params.queue_depth = atoi(argv[++i]);
         } else {
             usage(argv[0]);
             return 1;
         }
     }
+
+#ifndef HAS_URING
+    if (params.queue_depth > 1) {
+        fprintf(stderr, "[worker] warning: --queue-depth %d requested, but worker was compiled without io_uring support. Falling back to synchronous I/O.\n", params.queue_depth);
+    }
+#endif
 
     // Ensure tmp dir exists (best-effort; orchestrator should create it first)
     char mkdircmd[600];

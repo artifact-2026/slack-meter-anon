@@ -59,6 +59,7 @@ def run_probe(
     bg_io_mode:   str = "rand_write",
     probe_io_mode: str = "rand_write",
     samples:      int = 3,
+    queue_depth:  int = 1,
 ) -> tuple[float, float]:
     """Run bg + probe workers concurrently samples times; return median (bg_tput, probe_tput) in ops/s."""
     def make_cmd(io_mix: float, mem_mix: float, intensity: float, seed: int, mode: str) -> list[str]:
@@ -70,7 +71,8 @@ def run_probe(
                 "--warmup",    str(warmup),
                 "--tmp-dir",   tmp_dir,
                 "--seed",      str(seed),
-                "--io-mode",   mode]
+                "--io-mode",   mode,
+                "--queue-depth", str(queue_depth)]
 
     runs: list[tuple[float, float]] = []
 
@@ -143,6 +145,7 @@ def sweep(
     bg_io_mode:   str   = "rand_write",
     probe_io_mode: str   = "rand_write",
     samples:      int   = 3,
+    queue_depth:  int   = 1,
 ) -> dict:
     os.makedirs(tmp_dir, exist_ok=True)
     
@@ -163,7 +166,7 @@ def sweep(
     kw = dict(bg_procs=bg_procs, bg_io_mix=bg_io_mix, bg_mem_mix=bg_mem_mix, bg_intensity=bg_intensity,
               probe_io_mix=probe_io_mix, probe_mem_mix=probe_mem_mix,
               duration=duration, warmup=warmup, tmp_dir=tmp_dir, worker_bin=worker_bin, tput_key=tput_key, 
-              bg_io_mode=bg_io_mode, probe_io_mode=probe_io_mode, samples=samples)
+              bg_io_mode=bg_io_mode, probe_io_mode=probe_io_mode, samples=samples, queue_depth=queue_depth)
 
     # ------------------------------------------------------------------
     # Phase 0: baseline
@@ -401,6 +404,8 @@ def main() -> None:
     parser.add_argument("--probe-io-mode",default="rand_write",      help="Probe IO Mode")
     parser.add_argument("--output",       default=None,              metavar="FILE")
     parser.add_argument("--plot",         default=None,              metavar="FILE")
+    parser.add_argument("--queue-depth",  type=int,   default=1,     metavar="QD",
+                        help="queue depth/concurrency per worker for io_uring (default: 1)")
     args = parser.parse_args()
 
     if not os.path.exists(args.worker_bin):
@@ -431,6 +436,7 @@ def main() -> None:
         bg_io_mode   = args.bg_io_mode,
         probe_io_mode= args.probe_io_mode,
         samples      = args.samples,
+        queue_depth  = args.queue_depth,
     )
 
     print("\n" + "=" * 60)

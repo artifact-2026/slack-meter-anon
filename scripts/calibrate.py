@@ -10,7 +10,7 @@ REPO_ROOT  = Path(__file__).parent.parent.resolve()
 WORKER_BIN = str(REPO_ROOT / "build" / "worker")
 
 def run_workers(num_full_workers, fractional_intensity=0.0, *,
-                resource_type, duration, warmup, tmp_dir, worker_bin, io_mode="rand_write"):
+                resource_type, duration, warmup, tmp_dir, worker_bin, io_mode="rand_write", queue_depth=1):
     """Spawns N full workers + 1 optional fractional worker and returns total resource throughput."""
     msg = f"Running {num_full_workers} worker(s)"
     if fractional_intensity > 0:
@@ -29,7 +29,8 @@ def run_workers(num_full_workers, fractional_intensity=0.0, *,
                 "--warmup",    str(warmup),
                 "--tmp-dir",   tmp_dir,
                 "--seed",      str(seed),
-                "--io-mode",   io_mode]
+                "--io-mode",   io_mode,
+                "--queue-depth", str(queue_depth)]
 
     processes = []
     for i in range(num_full_workers):
@@ -65,7 +66,7 @@ def run_workers(num_full_workers, fractional_intensity=0.0, *,
 
 
 def calibrate(*, resource_type, duration, warmup, tmp_dir, worker_bin,
-              io_mode="rand_write", step=1, start_n=None):
+              io_mode="rand_write", step=1, start_n=None, queue_depth=1):
     """Run the full capacity calibration and return a result dict.
 
     start_n  – skip straight to this concurrency level; useful when you already
@@ -75,7 +76,7 @@ def calibrate(*, resource_type, duration, warmup, tmp_dir, worker_bin,
     """
     os.makedirs(tmp_dir, exist_ok=True)
 
-    kw = dict(resource_type=resource_type, duration=duration, warmup=warmup, tmp_dir=tmp_dir, worker_bin=worker_bin, io_mode=io_mode)
+    kw = dict(resource_type=resource_type, duration=duration, warmup=warmup, tmp_dir=tmp_dir, worker_bin=worker_bin, io_mode=io_mode, queue_depth=queue_depth)
 
     history = []
 
@@ -157,6 +158,8 @@ def main():
                         help="concurrency step size for Phase 1 sweep (default: 1; use 4 for read modes)")
     parser.add_argument("--start-n",    type=int, default=None, metavar="N",
                         help="skip straight to this concurrency level; useful when saturating near a known point")
+    parser.add_argument("--queue-depth",type=int, default=1, metavar="QD",
+                        help="queue depth/concurrency per worker for io_uring (default: 1)")
     parser.add_argument("--output",     default=None,
                         metavar="FILE",help="write JSON result to this file")
     args = parser.parse_args()
@@ -175,7 +178,7 @@ def main():
 
     result = calibrate(resource_type=args.resource_type, duration=args.duration, warmup=args.warmup,
                        tmp_dir=args.tmp_dir, worker_bin=args.worker_bin, io_mode=args.io_mode,
-                       step=args.step, start_n=args.start_n)
+                       step=args.step, start_n=args.start_n, queue_depth=args.queue_depth)
 
     print("==================================================")
     print(" Calibration Complete ")

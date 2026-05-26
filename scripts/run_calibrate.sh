@@ -8,6 +8,7 @@
 #   IO_MODE=<mode>        rand_write | rand_read | rand_read_64k | seq_read (default: rand_write)
 #   STEP=<int>            Phase 1 concurrency step size (default: 1; use 4 for read modes)
 #   START_N=<int>         Start sweep at this concurrency (skip 1..N-1; optional)
+#   QUEUE_DEPTH=<int>     Queue depth/concurrency per worker for io_uring (default: 1)
 #   INTENSITY=<float>     fraction of ticks that do real work (default: 0.75)
 #   DURATION=<secs>       worker run duration (default: 30)
 #   TMP_DIR=<path>        scratch dir for I/O ops (default: /tmp/slack-meter)
@@ -36,6 +37,7 @@ fi
 
 IO_MODE="${IO_MODE:-rand_write}"
 RESOURCE_TYPE="${RESOURCE_TYPE:-io}"
+QUEUE_DEPTH="${QUEUE_DEPTH:-1}"
 
 # ---------------------------------------------------------------------------
 # Default --output to results/calibration/cap_<IO_MODE>.json unless the
@@ -58,12 +60,13 @@ if [[ -n "${START_N:-}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-log "Running ${RESOURCE_TYPE} calibration sweep (mode: ${IO_MODE}, step: ${STEP}${START_N:+, start-n: ${START_N}})..."
+log "Running ${RESOURCE_TYPE} calibration sweep (mode: ${IO_MODE}, step: ${STEP}${START_N:+, start-n: ${START_N}}, qd: ${QUEUE_DEPTH})..."
 # shellcheck disable=SC2086
 python3 "$REPO/scripts/calibrate.py" \
     --resource-type "$RESOURCE_TYPE" \
     --io-mode "$IO_MODE" \
     --step "$STEP" \
+    --queue-depth "$QUEUE_DEPTH" \
     $START_N_ARG \
     $OUTPUT_ARG \
     "$@"

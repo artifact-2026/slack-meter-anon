@@ -4,6 +4,10 @@
 #include <random>
 #include <string>
 
+#ifdef HAS_URING
+#include <liburing.h>
+#endif
+
 // ----------------------------------------------------------------------------
 // WorkloadParams
 // Defines a workload by two dimensions:
@@ -20,6 +24,7 @@ struct WorkloadParams {
   std::string tmp_dir; // scratch space for I/O ops
   uint64_t seed;       // RNG seed (fixed for reproducibility)
   std::string io_mode; // rand_write | rand_read | rand_read_64k | seq_read
+  int queue_depth;     // concurrency level per worker (default: 1)
 };
 
 // ----------------------------------------------------------------------------
@@ -71,14 +76,22 @@ struct IoState {
   // ---- sequential 1 MiB O_DIRECT read  (do_io_seq_read_work, Probe D) -------
   void *seq_buf = nullptr; // posix_memalign'd, SEQ_BUF_SIZE (1 MiB) bytes
   size_t seq_cursor = 0;   // current offset; advances by SEQ_BUF_SIZE
+
+#ifdef HAS_URING
+  bool use_uring = false;
+  struct io_uring ring;
+  int queue_depth = 1;
+  void **ring_bufs = nullptr;
+  size_t ring_buf_size = 0;
+#endif
 };
 
 // Open (or create) the per-worker scratch file and return an initialised
 // IoState.  file_size must be a multiple of IO_BUF_SIZE.
 // Returns a state with fd == -1 on failure.
 static constexpr size_t IO_FILE_SIZE = 256ULL * 1024 * 1024; // 256 MiB
-IoState open_io_file(const std::string &tmp_dir,
-                     size_t file_size = IO_FILE_SIZE);
+IoState open_io_file(const std::string &tmp_dir, const std::string &io_mode,
+                     int queue_depth, size_t file_size = IO_FILE_SIZE);
 
 // Issue one 4 KiB O_DIRECT write to a random aligned offset within the file.
 // rng is the caller's existing generator — no extra state needed.
@@ -92,7 +105,8 @@ void do_io_work(IoState &st, std::mt19937_64 &rng);
 void do_io_read_work(IoState &st, std::mt19937_64 &rng);
 
 // Issue one 64 KiB O_DIRECT read from a random 64 KiB-aligned offset (Probe C).
-// Tests whether slack is sensitive to operation granularity vs. 4 KiB rand_read.
+// Tests whether slack is sensitive to operation granularity vs. 4 KiB
+// rand_read.
 void do_io_read_64k_work(IoState &st, std::mt19937_64 &rng);
 
 // Issue one 1 MiB O_DIRECT sequential read at the current cursor (Probe D).
