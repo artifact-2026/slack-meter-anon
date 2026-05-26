@@ -49,12 +49,32 @@ static constexpr int CPU_ITERS = 18'400;
 // do_cpu_work – one unit of CPU work: a tight arithmetic loop.
 // Called repeatedly inside a tick until the tick window expires.
 // ----------------------------------------------------------------------------
-void do_cpu_work() {
+void do_cpu_int_work() {
   volatile uint64_t acc = 1;
   for (int i = 1; i <= CPU_ITERS; ++i) {
     acc = acc * (uint64_t)i ^ (acc >> 7);
   }
   (void)acc;
+}
+
+void do_cpu_work() {
+  do_cpu_int_work();
+}
+
+void do_cpu_fp_work() {
+  volatile double acc = 1.0;
+  for (int i = 1; i <= CPU_ITERS; ++i) {
+    acc = acc * 1.0001 - (double)i * 0.00001;
+  }
+  (void)acc;
+}
+
+void do_cpu_hash_work() {
+  volatile uint32_t hash = 2166136261U; // FNV-1a offset basis
+  for (int i = 1; i <= CPU_ITERS; ++i) {
+    hash = (hash ^ i) * 16777619ULL;
+  }
+  (void)hash;
 }
 
 // ----------------------------------------------------------------------------
@@ -614,9 +634,15 @@ WorkloadResult run_workload(const WorkloadParams &params) {
           ++res.mem_ops;
         }
       } else {
-        // CPU phase: hammer do_cpu_work() until the tick window closes.
+        // CPU phase: hammer CPU flavor until the tick window closes.
         while (std::chrono::steady_clock::now() < tick_end) {
-          do_cpu_work();
+          if (params.cpu_mode == "cpu_fp") {
+            do_cpu_fp_work();
+          } else if (params.cpu_mode == "cpu_hash") {
+            do_cpu_hash_work();
+          } else {
+            do_cpu_int_work();
+          }
           ++res.cpu_ops;
         }
       }

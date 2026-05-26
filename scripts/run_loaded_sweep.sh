@@ -81,6 +81,9 @@ PROBE_IO_MODE="${PROBE_IO_MODE:-${IO_MODE:-rand_write}}"
 DROP_PCT="${DROP_PCT:-0.10}"
 INTERFERENCE_COUNT="${INTERFERENCE_COUNT:-3}"
 SAMPLES="${SAMPLES:-1}"
+CPU_MODE="${CPU_MODE:-cpu_int}"
+BG_CPU_MODE="${BG_CPU_MODE:-$CPU_MODE}"
+PROBE_CPU_MODE="${PROBE_CPU_MODE:-$CPU_MODE}"
 SAT_EPSILON="${SAT_EPSILON:-1.025}"
 if [[ -z "${TMP_DIR:-}" ]]; then
     if [[ -d "/holly" && -w "/holly" ]]; then
@@ -127,6 +130,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --bg-io-mode)
             BG_IO_MODE="$2"
+            shift 2
+            ;;
+        --bg-cpu-mode)
+            BG_CPU_MODE="$2"
+            shift 2
+            ;;
+        --probe-cpu-mode)
+            PROBE_CPU_MODE="$2"
             shift 2
             ;;
         --bg-procs)
@@ -281,6 +292,8 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
         --worker-bin   "$BUILD/worker"   \
         --bg-io-mode   "$BG_IO_MODE"     \
         --probe-io-mode "$PROBE_IO_MODE" \
+        --bg-cpu-mode   "$BG_CPU_MODE"    \
+        --probe-cpu-mode "$PROBE_CPU_MODE" \
         --bg-queue-depth    "$BG_QUEUE_DEPTH"    \
         --probe-queue-depth "$PROBE_QUEUE_DEPTH" \
         --output       "$OUTPUT_DIR/sweep_${SWEEP}.json" \
@@ -298,6 +311,7 @@ else
             --seed      $((SEED + i))   \
             --io-mode   "$BG_IO_MODE"   \
             --queue-depth "$BG_QUEUE_DEPTH"\
+            --cpu-mode  "$BG_CPU_MODE"  \
             > "$OUTPUT_DIR/bg_worker_${i}.json" &
         BG_PIDS+=($!)
     done

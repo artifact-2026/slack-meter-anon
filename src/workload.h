@@ -25,6 +25,7 @@ struct WorkloadParams {
   uint64_t seed;       // RNG seed (fixed for reproducibility)
   std::string io_mode; // rand_write | rand_read | rand_read_64k | seq_read
   int queue_depth;     // concurrency level per worker (default: 1)
+  std::string cpu_mode; // cpu_int | cpu_fp | cpu_hash
 };
 
 // ----------------------------------------------------------------------------
@@ -126,6 +127,9 @@ WorkloadResult run_workload(const WorkloadParams &params);
 // Individual operation (exposed for unit testing / benchmarking).
 // do_cpu_work performs one fixed-size unit of arithmetic work.
 void do_cpu_work();
+void do_cpu_int_work();
+void do_cpu_fp_work();
+void do_cpu_hash_work();
 
 // ----------------------------------------------------------------------------
 // MemState – per-worker memory-bandwidth state allocated once before the main

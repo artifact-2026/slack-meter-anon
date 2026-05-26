@@ -22,7 +22,7 @@ static void usage(const char* prog) {
     fprintf(stderr,
         "Usage: %s [--io-mix <float>] [--mem-mix <float>] [--intensity <float>]\n"
         "          [--duration <secs>] [--tmp-dir <path>] [--io-mode <mode>]\n"
-        "          [--queue-depth <depth>]\n",
+        "          [--queue-depth <depth>] [--cpu-mode <mode>]\n",
         prog);
 }
 
@@ -37,6 +37,7 @@ int main(int argc, char* argv[]) {
     params.seed          = 42;
     params.io_mode       = "rand_write";
     params.queue_depth   = 1;
+    params.cpu_mode      = "cpu_int";
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--io-mix") == 0 && i + 1 < argc) {
@@ -57,6 +58,8 @@ int main(int argc, char* argv[]) {
             params.io_mode = argv[++i];
         } else if ((strcmp(argv[i], "--queue-depth") == 0 || strcmp(argv[i], "--qd") == 0) && i + 1 < argc) {
             params.queue_depth = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--cpu-mode") == 0 && i + 1 < argc) {
+            params.cpu_mode = argv[++i];
         } else {
             usage(argv[0]);
             return 1;
