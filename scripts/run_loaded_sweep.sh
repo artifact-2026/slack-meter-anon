@@ -43,9 +43,11 @@
 #   INTENSITY=<float>    sweep baseline intensity                   (default: 0.75)
 #   DROP_PCT=<float>     throughput-drop fraction for interference  (default: 0.05)
 #   SAT_EPSILON=<float>  min improvement ratio to keep sweeping     (default: 1.025)
-#   BG_IO_MODE=<mode>    values: rand_write | rand_read | seq_write | seq_read  (default: rand_write)
-#   PROBE_IO_MODE=<mode> values: rand_write | rand_read | seq_write | seq_read (default: rand_write)
-#   QUEUE_DEPTH=<int>    queue depth/concurrency per worker for io_uring (default: 1)
+#   BG_IO_MODE=<mode>    values: rand_write | rand_read | rand_read_64k | seq_read  (default: rand_write)
+#   PROBE_IO_MODE=<mode> values: rand_write | rand_read | rand_read_64k | seq_read (default: rand_write)
+#   QUEUE_DEPTH=<int>    default queue depth/concurrency per worker for io_uring (default: 1)
+#   BG_QUEUE_DEPTH=<int>    queue depth for background workers (default: QUEUE_DEPTH)
+#   PROBE_QUEUE_DEPTH=<int> queue depth for probe workers (default: QUEUE_DEPTH)
 #
 #   Collectors / output
 #   --------------------
@@ -90,6 +92,8 @@ INTERVAL="${INTERVAL:-1}"
 SEED="${SEED:-42}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO/results/loaded_sweep}"
 QUEUE_DEPTH="${QUEUE_DEPTH:-1}"
+BG_QUEUE_DEPTH="${BG_QUEUE_DEPTH:-$QUEUE_DEPTH}"
+PROBE_QUEUE_DEPTH="${PROBE_QUEUE_DEPTH:-$QUEUE_DEPTH}"
 
 # Background worker params defaults
 BG_PROCS="${BG_PROCS:-4}"
@@ -130,6 +134,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --output-dir)
             OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        --queue-depth)
+            QUEUE_DEPTH="$2"
+            shift 2
+            ;;
+        --bg-queue-depth)
+            BG_QUEUE_DEPTH="$2"
+            shift 2
+            ;;
+        --probe-queue-depth)
+            PROBE_QUEUE_DEPTH="$2"
             shift 2
             ;;
         *)
@@ -255,7 +271,8 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
         --worker-bin   "$BUILD/worker"   \
         --bg-io-mode   "$BG_IO_MODE"     \
         --probe-io-mode "$PROBE_IO_MODE" \
-        --queue-depth  "$QUEUE_DEPTH"    \
+        --bg-queue-depth    "$BG_QUEUE_DEPTH"    \
+        --probe-queue-depth "$PROBE_QUEUE_DEPTH" \
         --output       "$OUTPUT_DIR/sweep_${SWEEP}.json" \
         --plot         "$OUTPUT_DIR/slack_result_${SWEEP}.png"
 else
@@ -270,7 +287,7 @@ else
             --tmp-dir   "$TMP_DIR"      \
             --seed      $((SEED + i))   \
             --io-mode   "$BG_IO_MODE"   \
-            --queue-depth "$QUEUE_DEPTH"\
+            --queue-depth "$BG_QUEUE_DEPTH"\
             > "$OUTPUT_DIR/bg_worker_${i}.json" &
         BG_PIDS+=($!)
     done
