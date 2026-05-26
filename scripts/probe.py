@@ -84,7 +84,7 @@ def run_probe(
             env["REUSE_FILE"] = "1"
             procs.append(subprocess.Popen(
                 make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i + run_idx * 100, bg_io_mode),
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env))
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
         probe_idx = 0
         for i in range(n_probe_full):
             env = os.environ.copy()
@@ -92,7 +92,7 @@ def run_probe(
             env["REUSE_FILE"] = "1"
             procs.append(subprocess.Popen(
                 make_cmd(probe_io_mix, probe_mem_mix, 1.0, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode),
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env))
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
             probe_idx += 1
         
         if probe_frac > 0.0:
@@ -101,11 +101,13 @@ def run_probe(
             env["REUSE_FILE"] = "1"
             procs.append(subprocess.Popen(
                 make_cmd(probe_io_mix, probe_mem_mix, probe_frac, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode),
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env))
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
 
         bg_tput = probe_tput = 0.0
         for idx, p in enumerate(procs):
-            stdout, _ = p.communicate()
+            stdout, stderr = p.communicate()
+            if stderr and stderr.strip():
+                print(f"\n[worker warning]: {stderr.decode('utf-8', errors='replace').strip()}", file=sys.stderr)
             if p.returncode != 0:
                 print(f"\n[probe] Worker {idx} exited non-zero (run {run_idx}) — skipping sample")
                 continue

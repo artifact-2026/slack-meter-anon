@@ -46,8 +46,10 @@ def run_workers(num_full_workers, fractional_intensity=0.0, *,
     total_throughput = 0.0
     for p in processes:
         stdout, stderr = p.communicate()
+        if stderr and stderr.strip():
+            print(f"\n[worker warning]: {stderr.strip()}", file=sys.stderr)
         if p.returncode != 0:
-            print(f"\nWorker failed!\nSTDERR: {stderr}")
+            print(f"\nWorker failed (exit code {p.returncode})")
             sys.exit(1)
         try:
             data = json.loads(stdout.strip())
@@ -115,27 +117,12 @@ def calibrate(*, resource_type, duration, warmup, tmp_dir, worker_bin,
 
     # Find the n that gave the absolute peak during phase 1
     best_p1 = max(history, key=lambda x: x[2])
-    best_n = best_p1[0]
-
-    # Phase 2: Fixed grid search on fractional worker.
-    # Probe on both sides of best_n to catch cases where the true peak sits
-    # between (best_n-1)+frac and best_n+frac.
-    print(f"\n--- Phase 2: Fractional Worker Grid Search ---")
-    base_candidates = [c for c in [best_n - 1, best_n] if c >= 1]
-    for base_n in base_candidates:
-        print(f"Searching for hidden capacity with {base_n} full + fractional worker")
-        for frac in [0.25, 0.50, 0.75]:
-            t = run_workers(base_n, frac, **kw)
-            history.append((base_n, frac, t))
-
-    # The true capacity is simply the absolute maximum throughput observed anywhere
-    absolute_best = max(history, key=lambda x: x[2])
     
     return dict(
         resource           = resource_type,
         io_mode            = io_mode,
-        peak_throughput    = absolute_best[2],
-        optimal_workers    = absolute_best[0],
+        peak_throughput    = best_p1[2],
+        optimal_workers    = best_p1[0],
     )
 
 
