@@ -64,8 +64,15 @@ def run_workers(num_full_workers, fractional_intensity=0.0, *,
     return total_throughput
 
 
-def calibrate(*, resource_type, duration, warmup, tmp_dir, worker_bin, io_mode="rand_write"):
-    """Run the full capacity calibration and return a result dict."""
+def calibrate(*, resource_type, duration, warmup, tmp_dir, worker_bin,
+              io_mode="rand_write", step=1, start_n=None):
+    """Run the full capacity calibration and return a result dict.
+
+    start_n  – skip straight to this concurrency level; useful when you already
+               know the device saturates well above N=1.  If None, starts at
+               the first step boundary (i.e. step).  start_n need not be a
+               multiple of step — the sweep then increments by step from there.
+    """
     os.makedirs(tmp_dir, exist_ok=True)
 
     kw = dict(resource_type=resource_type, duration=duration, warmup=warmup, tmp_dir=tmp_dir, worker_bin=worker_bin, io_mode=io_mode)
@@ -79,11 +86,13 @@ def calibrate(*, resource_type, duration, warmup, tmp_dir, worker_bin, io_mode="
     # actual drop.  Requiring three consecutive *declines* (not just
     # sub-threshold gains) prevents stopping prematurely on a still-climbing
     # curve.
-    n = 1
-    decline_strikes = 0
+    first_n = start_n if start_n is not None else step
+    n = max(1, first_n)  # clamp to at least 1
+    if start_n is not None:
+        print(f"  Starting sweep at n={n} (--start-n supplied; skipping 1..{n-1})")
     running_max = 0.0
-    DECLINE_THRESHOLD = 0.98   # throughput must drop below 98% of peak to count as decline
-    DECLINE_REQUIRED  = 3      # three consecutive declines → stop
+    steps_since_improvement = 0
+    MAX_STAGNATION = 5   # stop after this many steps with no new peak
 
     while True:
         throughput = run_workers(n, 0.0, **kw)
@@ -91,20 +100,17 @@ def calibrate(*, resource_type, duration, warmup, tmp_dir, worker_bin, io_mode="
 
         if throughput > running_max:
             running_max = throughput
-            decline_strikes = 0
-        elif throughput < running_max * DECLINE_THRESHOLD:
-            decline_strikes += 1
-        # flat (between 98% and 100% of peak): reset decline streak
+            steps_since_improvement = 0
         else:
-            decline_strikes = 0
+            steps_since_improvement += 1
 
-        if decline_strikes >= DECLINE_REQUIRED:
-            print("\nThroughput has declined. Stopping integer sweep.")
+        if steps_since_improvement >= MAX_STAGNATION:
+            print("\nThroughput stagnated. Stopping integer sweep.")
             break
         if n >= 128:
             print("\nReached 128 processes. Stopping integer sweep.")
             break
-        n += 1
+        n += step
 
     # Find the n that gave the absolute peak during phase 1
     best_p1 = max(history, key=lambda x: x[2])
@@ -126,9 +132,9 @@ def calibrate(*, resource_type, duration, warmup, tmp_dir, worker_bin, io_mode="
     
     return dict(
         resource           = resource_type,
+        io_mode            = io_mode,
         peak_throughput    = absolute_best[2],
         optimal_workers    = absolute_best[0],
-        best_intensity     = absolute_best[1],
     )
 
 
@@ -146,7 +152,11 @@ def main():
     parser.add_argument("--worker-bin", default=WORKER_BIN,
                         metavar="PATH",help="path to the worker binary")
     parser.add_argument("--io-mode",    default="rand_write",
-                        help="IO Mode: rand_write, rand_read, seq_write, seq_read")
+                        help="IO Mode: rand_write | rand_read | rand_read_64k | seq_read")
+    parser.add_argument("--step",       type=int, default=1, metavar="N",
+                        help="concurrency step size for Phase 1 sweep (default: 1; use 4 for read modes)")
+    parser.add_argument("--start-n",    type=int, default=None, metavar="N",
+                        help="skip straight to this concurrency level; useful when saturating near a known point")
     parser.add_argument("--output",     default=None,
                         metavar="FILE",help="write JSON result to this file")
     args = parser.parse_args()
@@ -164,14 +174,14 @@ def main():
     print("--------------------------------------------------")
 
     result = calibrate(resource_type=args.resource_type, duration=args.duration, warmup=args.warmup,
-                       tmp_dir=args.tmp_dir, worker_bin=args.worker_bin, io_mode=args.io_mode)
+                       tmp_dir=args.tmp_dir, worker_bin=args.worker_bin, io_mode=args.io_mode,
+                       step=args.step, start_n=args.start_n)
 
     print("==================================================")
     print(" Calibration Complete ")
     print("==================================================")
     print(f"Peak {args.resource_type.upper()} Throughput: {result['peak_throughput']:,.0f} tokens/s")
-    print(f"Achieved at concurrency:    {result['optimal_workers']} full "
-          f"+ 1 fractional ({result['best_intensity']:.2f})")
+    print(f"Achieved at concurrency:    {result['optimal_workers']} worker(s)")
     k = result['peak_throughput'] / 1000.0
     print(f"System Capacity:            {k:,.2f} kTokens/s")
     print("==================================================")
