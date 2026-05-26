@@ -59,10 +59,11 @@ def run_probe(
     bg_io_mode:   str = "rand_write",
     probe_io_mode: str = "rand_write",
     samples:      int = 3,
-    queue_depth:  int = 1,
+    bg_queue_depth: int = 1,
+    probe_queue_depth: int = 1,
 ) -> tuple[float, float]:
     """Run bg + probe workers concurrently samples times; return median (bg_tput, probe_tput) in ops/s."""
-    def make_cmd(io_mix: float, mem_mix: float, intensity: float, seed: int, mode: str) -> list[str]:
+    def make_cmd(io_mix: float, mem_mix: float, intensity: float, seed: int, mode: str, qd: int) -> list[str]:
         return [worker_bin,
                 "--io-mix",    str(io_mix),
                 "--mem-mix",   str(mem_mix),
@@ -72,7 +73,7 @@ def run_probe(
                 "--tmp-dir",   tmp_dir,
                 "--seed",      str(seed),
                 "--io-mode",   mode,
-                "--queue-depth", str(queue_depth)]
+                "--queue-depth", str(qd)]
 
     runs: list[tuple[float, float]] = []
 
@@ -83,7 +84,7 @@ def run_probe(
             env["WORKER_ID"] = str(i)
             env["REUSE_FILE"] = "1"
             procs.append(subprocess.Popen(
-                make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i + run_idx * 100, bg_io_mode),
+                make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i + run_idx * 100, bg_io_mode, bg_queue_depth),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
         probe_idx = 0
         for i in range(n_probe_full):
@@ -91,7 +92,7 @@ def run_probe(
             env["WORKER_ID"] = str(bg_procs + probe_idx)
             env["REUSE_FILE"] = "1"
             procs.append(subprocess.Popen(
-                make_cmd(probe_io_mix, probe_mem_mix, 1.0, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode),
+                make_cmd(probe_io_mix, probe_mem_mix, 1.0, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode, probe_queue_depth),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
             probe_idx += 1
         
@@ -100,7 +101,7 @@ def run_probe(
             env["WORKER_ID"] = str(bg_procs + probe_idx)
             env["REUSE_FILE"] = "1"
             procs.append(subprocess.Popen(
-                make_cmd(probe_io_mix, probe_mem_mix, probe_frac, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode),
+                make_cmd(probe_io_mix, probe_mem_mix, probe_frac, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode, probe_queue_depth),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
 
         bg_tput = probe_tput = 0.0
@@ -147,7 +148,8 @@ def sweep(
     bg_io_mode:   str   = "rand_write",
     probe_io_mode: str   = "rand_write",
     samples:      int   = 3,
-    queue_depth:  int   = 1,
+    bg_queue_depth: int = 1,
+    probe_queue_depth: int = 1,
 ) -> dict:
     os.makedirs(tmp_dir, exist_ok=True)
     
@@ -164,11 +166,12 @@ def sweep(
         probe_io_mix = 0.0
         probe_mem_mix = 0.0
         tput_key = "cpu_throughput"
-
+ 
     kw = dict(bg_procs=bg_procs, bg_io_mix=bg_io_mix, bg_mem_mix=bg_mem_mix, bg_intensity=bg_intensity,
               probe_io_mix=probe_io_mix, probe_mem_mix=probe_mem_mix,
               duration=duration, warmup=warmup, tmp_dir=tmp_dir, worker_bin=worker_bin, tput_key=tput_key, 
-              bg_io_mode=bg_io_mode, probe_io_mode=probe_io_mode, samples=samples, queue_depth=queue_depth)
+              bg_io_mode=bg_io_mode, probe_io_mode=probe_io_mode, samples=samples,
+              bg_queue_depth=bg_queue_depth, probe_queue_depth=probe_queue_depth)
 
     # ------------------------------------------------------------------
     # Phase 0: baseline
@@ -407,7 +410,11 @@ def main() -> None:
     parser.add_argument("--output",       default=None,              metavar="FILE")
     parser.add_argument("--plot",         default=None,              metavar="FILE")
     parser.add_argument("--queue-depth",  type=int,   default=1,     metavar="QD",
-                        help="queue depth/concurrency per worker for io_uring (default: 1)")
+                        help="default queue depth/concurrency per worker for io_uring (default: 1)")
+    parser.add_argument("--bg-queue-depth", type=int, default=None,  metavar="QD",
+                        help="queue depth/concurrency per background worker (defaults to --queue-depth)")
+    parser.add_argument("--probe-queue-depth", type=int, default=None, metavar="QD",
+                        help="queue depth/concurrency per probe worker (defaults to --queue-depth)")
     args = parser.parse_args()
 
     if not os.path.exists(args.worker_bin):
@@ -422,6 +429,9 @@ def main() -> None:
     print(f"  Probe dur  : {args.duration}s   drop_pct={args.drop_pct*100:.0f}%")
     print(f"  Tmp dir    : {args.tmp_dir}")
     print("=" * 60)
+
+    bg_qd = args.bg_queue_depth if args.bg_queue_depth is not None else args.queue_depth
+    probe_qd = args.probe_queue_depth if args.probe_queue_depth is not None else args.queue_depth
 
     result = sweep(
         probe_type   = args.probe_type,
@@ -438,7 +448,8 @@ def main() -> None:
         bg_io_mode   = args.bg_io_mode,
         probe_io_mode= args.probe_io_mode,
         samples      = args.samples,
-        queue_depth  = args.queue_depth,
+        bg_queue_depth= bg_qd,
+        probe_queue_depth= probe_qd,
     )
 
     print("\n" + "=" * 60)
