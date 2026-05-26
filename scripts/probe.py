@@ -178,7 +178,6 @@ def sweep(
               duration=duration, warmup=warmup, tmp_dir=tmp_dir, worker_bin=worker_bin, tput_key=tput_key, 
               bg_io_mode=bg_io_mode, probe_io_mode=probe_io_mode, samples=samples,
               bg_queue_depth=bg_queue_depth, probe_queue_depth=probe_queue_depth,
-              interference_threshold_count=interference_threshold_count,
               bg_cpu_mode=bg_cpu_mode, probe_cpu_mode=probe_cpu_mode)
 
     # ------------------------------------------------------------------

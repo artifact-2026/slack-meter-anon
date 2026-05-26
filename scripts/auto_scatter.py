@@ -169,10 +169,10 @@ def main():
 
     for u, s in zip(utils, slacks):
         diff = u + s - 100.0
-        if abs(diff) <= 10.0:
+        if abs(diff) <= 15.0:
             near_x.append(u)
             near_y.append(s)
-        elif diff > 10.0:
+        elif diff > 15.0:
             above_x.append(u)
             above_y.append(s)
         else:
