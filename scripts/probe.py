@@ -150,6 +150,10 @@ def sweep(
     samples:      int   = 3,
     bg_queue_depth: int = 1,
     probe_queue_depth: int = 1,
+    step:         int = 1,
+    start_n:      Optional[int] = None,
+    no_early_stop: bool = False,
+    n_full_override: Optional[int] = None,
 ) -> dict:
     os.makedirs(tmp_dir, exist_ok=True)
     
@@ -181,30 +185,46 @@ def sweep(
     threshold = baseline_tput * (1.0 - drop_pct)
     print(f"  Baseline bg : {baseline_tput*_KT:,.3f} kTokens/s")
     print(f"  Threshold   : {threshold*_KT:,.3f} kTokens/s  (drop >= {drop_pct*100:.1f}%)")
-
-    # ------------------------------------------------------------------
-    # Phase 1: linear sweep
-    # ------------------------------------------------------------------
-    print(f"\n--- Phase 1: Linear {probe_type.upper()} sweep ---")
-    print(f"  {'Probes':>7}  {'bg (kT/s)':>12}  {probe_type.upper()+' (kT/s)':>12}  {'status':}")
-    print(f"  {'-------':>7}  {'---------':>12}  {'---------':>12}")
-
+ 
     phase1: list[dict] = []
     n_full = 0
-
-    for n_probe in range(1, max_probes + 1):
-        bg_tput, probe_tput = run_probe(n_probe_full=n_probe, probe_frac=0.0, **kw)
-        interfered = bg_tput < threshold
-        status = "INTERFERENCE" if interfered else "ok"
-        print(f"  {n_probe:>7d}  {bg_tput*_KT:>12.3f}  {probe_tput*_KT:>12.3f}  {status}")
-        phase1.append(dict(n_probe=n_probe, bg_ktokens=bg_tput*_KT, probe_ktokens=probe_tput*_KT,
-                           interfered=interfered))
-        if interfered:
-            n_full = n_probe - 1
-            break
-        n_full = n_probe
+ 
+    if n_full_override is not None:
+        print(f"\n--- Phase 1: Skipped (n_full override provided: {n_full_override}) ---")
+        n_full = n_full_override
     else:
-        print(f"\n  Reached max_probes={max_probes} without interference.")
+        # ------------------------------------------------------------------
+        # Phase 1: linear sweep
+        # ------------------------------------------------------------------
+        print(f"\n--- Phase 1: Linear {probe_type.upper()} sweep ---")
+        print(f"  {'Probes':>7}  {'bg (kT/s)':>12}  {probe_type.upper()+' (kT/s)':>12}  {'status':}")
+        print(f"  {'-------':>7}  {'---------':>12}  {'---------':>12}")
+ 
+        first_n = start_n if start_n is not None else step
+        first_n = max(1, first_n)
+        first_interfered_n = None
+ 
+        n_probe = first_n
+        while n_probe <= max_probes:
+            bg_tput, probe_tput = run_probe(n_probe_full=n_probe, probe_frac=0.0, **kw)
+            interfered = bg_tput < threshold
+            status = "INTERFERENCE" if interfered else "ok"
+            print(f"  {n_probe:>7d}  {bg_tput*_KT:>12.3f}  {probe_tput*_KT:>12.3f}  {status}")
+            phase1.append(dict(n_probe=n_probe, bg_ktokens=bg_tput*_KT, probe_ktokens=probe_tput*_KT,
+                               interfered=interfered))
+            if interfered and first_interfered_n is None:
+                first_interfered_n = n_probe
+                if not no_early_stop:
+                    break
+            n_probe += step
+ 
+        if first_interfered_n is not None:
+            n_full = max(0, first_interfered_n - step)
+        else:
+            if phase1:
+                n_full = phase1[-1]['n_probe']
+            else:
+                n_full = 0
 
     # ------------------------------------------------------------------
     # Phase 2: binary search on fractional last worker
@@ -415,6 +435,14 @@ def main() -> None:
                         help="queue depth/concurrency per background worker (defaults to --queue-depth)")
     parser.add_argument("--probe-queue-depth", type=int, default=None, metavar="QD",
                         help="queue depth/concurrency per probe worker (defaults to --queue-depth)")
+    parser.add_argument("--step",         type=int,   default=1,     metavar="N",
+                        help="concurrency step size for Phase 1 sweep (default: 1)")
+    parser.add_argument("--start-n",      type=int,   default=None,  metavar="N",
+                        help="start sweep at this concurrency (default: step)")
+    parser.add_argument("--no-early-stop", action="store_true",
+                        help="do not stop Phase 1 on first interference; run full sweep")
+    parser.add_argument("--n-full",       type=int,   default=None,  metavar="N",
+                        help="skip Phase 1 and run Phase 2 directly with this number of locked full workers")
     args = parser.parse_args()
 
     if not os.path.exists(args.worker_bin):
@@ -450,6 +478,10 @@ def main() -> None:
         samples      = args.samples,
         bg_queue_depth= bg_qd,
         probe_queue_depth= probe_qd,
+        step         = args.step,
+        start_n      = args.start_n,
+        no_early_stop= args.no_early_stop,
+        n_full_override= args.n_full,
     )
 
     print("\n" + "=" * 60)
