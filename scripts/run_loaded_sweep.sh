@@ -45,6 +45,7 @@
 #   SAT_EPSILON=<float>  min improvement ratio to keep sweeping     (default: 1.025)
 #   BG_IO_MODE=<mode>    values: rand_write | rand_read | seq_write | seq_read  (default: rand_write)
 #   PROBE_IO_MODE=<mode> values: rand_write | rand_read | seq_write | seq_read (default: rand_write)
+#   QUEUE_DEPTH=<int>    queue depth/concurrency per worker for io_uring (default: 1)
 #
 #   Collectors / output
 #   --------------------
@@ -88,6 +89,7 @@ fi
 INTERVAL="${INTERVAL:-1}"
 SEED="${SEED:-42}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO/results/loaded_sweep}"
+QUEUE_DEPTH="${QUEUE_DEPTH:-1}"
 
 # Background worker params defaults
 BG_PROCS="${BG_PROCS:-4}"
@@ -253,6 +255,7 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
         --worker-bin   "$BUILD/worker"   \
         --bg-io-mode   "$BG_IO_MODE"     \
         --probe-io-mode "$PROBE_IO_MODE" \
+        --queue-depth  "$QUEUE_DEPTH"    \
         --output       "$OUTPUT_DIR/sweep_${SWEEP}.json" \
         --plot         "$OUTPUT_DIR/slack_result_${SWEEP}.png"
 else
@@ -267,6 +270,7 @@ else
             --tmp-dir   "$TMP_DIR"      \
             --seed      $((SEED + i))   \
             --io-mode   "$BG_IO_MODE"   \
+            --queue-depth "$QUEUE_DEPTH"\
             > "$OUTPUT_DIR/bg_worker_${i}.json" &
         BG_PIDS+=($!)
     done
