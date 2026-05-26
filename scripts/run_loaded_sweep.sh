@@ -32,10 +32,6 @@
 #   ----------------------------
 #   DURATION=<secs>      seconds per I/O probe                      (default: 30)
 #   SAMPLES=<n>          number of samples per probe level          (default: 3)
-#   STEP=<int>           Phase 1 concurrency step size              (default: 1)
-#   START_N=<int>        Start sweep at this concurrency            (optional)
-#   NO_EARLY_STOP=1      Do not stop Phase 1 on first interference; run full sweep
-#   N_FULL=<int>         Skip Phase 1 and run Phase 2 directly with this locked full worker count
 #
 #   Sweep — slack (orchestrate.py)
 #   ------------------------------
@@ -74,7 +70,7 @@ DEVICE="${DEVICE:-}"
 
 # Sweep / shared params defaults
 MODE="${MODE:-full}"
-DURATION="${DURATION:-60}"
+DURATION="${DURATION:-45}"
 WARMUP="${WARMUP:-5}"
 MAX_PROCS="${MAX_PROCS:-32}"
 MIN_PROCS="${MIN_PROCS:-4}"
@@ -82,8 +78,9 @@ IO_MIX="${IO_MIX:-0.3}"
 INTENSITY="${INTENSITY:-0.75}"
 BG_IO_MODE="${BG_IO_MODE:-${IO_MODE:-rand_write}}"
 PROBE_IO_MODE="${PROBE_IO_MODE:-${IO_MODE:-rand_write}}"
-DROP_PCT="${DROP_PCT:-0.05}"
-SAMPLES="${SAMPLES:-3}"
+DROP_PCT="${DROP_PCT:-0.10}"
+INTERFERENCE_COUNT="${INTERFERENCE_COUNT:-3}"
+SAMPLES="${SAMPLES:-1}"
 SAT_EPSILON="${SAT_EPSILON:-1.025}"
 if [[ -z "${TMP_DIR:-}" ]]; then
     if [[ -d "/holly" && -w "/holly" ]]; then
@@ -98,10 +95,6 @@ OUTPUT_DIR="${OUTPUT_DIR:-$REPO/results/loaded_sweep}"
 QUEUE_DEPTH="${QUEUE_DEPTH:-1}"
 BG_QUEUE_DEPTH="${BG_QUEUE_DEPTH:-$QUEUE_DEPTH}"
 PROBE_QUEUE_DEPTH="${PROBE_QUEUE_DEPTH:-$QUEUE_DEPTH}"
-STEP="${STEP:-1}"
-START_N="${START_N:-}"
-NO_EARLY_STOP="${NO_EARLY_STOP:-0}"
-N_FULL="${N_FULL:-}"
 
 # Background worker params defaults
 BG_PROCS="${BG_PROCS:-4}"
@@ -114,6 +107,14 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --samples)
             SAMPLES="$2"
+            shift 2
+            ;;
+        --drop-pct)
+            DROP_PCT="$2"
+            shift 2
+            ;;
+        --interference-count)
+            INTERFERENCE_COUNT="$2"
             shift 2
             ;;
         --sweep)
@@ -154,22 +155,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --probe-queue-depth)
             PROBE_QUEUE_DEPTH="$2"
-            shift 2
-            ;;
-        --step)
-            STEP="$2"
-            shift 2
-            ;;
-        --start-n)
-            START_N="$2"
-            shift 2
-            ;;
-        --no-early-stop)
-            NO_EARLY_STOP=1
-            shift
-            ;;
-        --n-full)
-            N_FULL="$2"
             shift 2
             ;;
         *)
@@ -281,15 +266,6 @@ fi
 if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
     log "Starting $SWEEP_UPPER sweep under load (probe.py)"
     log "  bg: $BG_PROCS workers  io_mix=$BG_IO_MIX mem_mix=$BG_MEM_MIX intensity=$BG_INTENSITY  duration=${DURATION}s"
-    NO_EARLY_STOP_ARG=""
-    if [[ "${NO_EARLY_STOP:-0}" == "1" ]]; then
-        NO_EARLY_STOP_ARG="--no-early-stop"
-    fi
-    N_FULL_ARG=""
-    if [[ -n "${N_FULL:-}" ]]; then
-        N_FULL_ARG="--n-full ${N_FULL}"
-    fi
-
     python3 "$REPO/scripts/probe.py" \
         --probe-type   "$SWEEP"          \
         --bg-procs     "$BG_PROCS"       \
@@ -299,6 +275,7 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
         --duration     "$DURATION"       \
         --warmup       "$WARMUP"         \
         --drop-pct     "$DROP_PCT"       \
+        --interference-threshold-count "$INTERFERENCE_COUNT" \
         --samples      "$SAMPLES"        \
         --tmp-dir      "$TMP_DIR"        \
         --worker-bin   "$BUILD/worker"   \
@@ -306,10 +283,6 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
         --probe-io-mode "$PROBE_IO_MODE" \
         --bg-queue-depth    "$BG_QUEUE_DEPTH"    \
         --probe-queue-depth "$PROBE_QUEUE_DEPTH" \
-        --step              "$STEP"              \
-        ${START_N:+--start-n "$START_N"}         \
-        ${NO_EARLY_STOP_ARG:-}                   \
-        ${N_FULL_ARG:-}                          \
         --output       "$OUTPUT_DIR/sweep_${SWEEP}.json" \
         --plot         "$OUTPUT_DIR/slack_result_${SWEEP}.png"
 else
