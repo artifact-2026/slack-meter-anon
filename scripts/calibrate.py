@@ -107,8 +107,8 @@ def calibrate(*, resource_type, duration, warmup, tmp_dir, worker_bin,
         if steps_since_improvement >= MAX_STAGNATION:
             print("\nThroughput stagnated. Stopping integer sweep.")
             break
-        if n >= 128:
-            print("\nReached 128 processes. Stopping integer sweep.")
+        if n >= 1024:
+            print("\nReached 1024 processes. Stopping integer sweep.")
             break
         n += step
 
