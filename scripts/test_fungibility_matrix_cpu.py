@@ -137,6 +137,8 @@ def main():
                         help="interference drop threshold percentage (default: 0.10)")
     parser.add_argument("--interference-count", type=int, default=3,
                         help="interference count to terminate Phase 1 (default: 3)")
+    parser.add_argument("--only-plot", action="store_true",
+                        help="Skip running sweeps and only generate the plot from existing CSV")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir).resolve()
@@ -161,89 +163,90 @@ def main():
         sys.exit(1)
 
     # Load capacities (either from CLI, file, or preexisting calibration artifacts)
-    capacities = load_capacities(PROBE_MODES, args.capacity_file, args.capacities, out_dir)
+    if not args.only_plot:
+        capacities = load_capacities(PROBE_MODES, args.capacity_file, args.capacities, out_dir)
 
-    print("\n" + "="*60)
-    print(" Phase 2: Probe Slack for 3x3 Matrix")
-    print("="*60)
-    
-    # Initialize CSV
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["bg_mode", "probe_mode", "capacity_kt", "slack_kt", "app_usage_kt", "footprint_pct"])
-
-    # Nested loop for the 9 combinations
-    for bg_mode in BG_MODES:
-        print("\n" + "-"*50)
-        print(f" Evaluating Background Workload: {bg_mode.upper()}")
-        print("-" * 50)
+        print("\n" + "="*60)
+        print(" Phase 2: Probe Slack for 3x3 Matrix")
+        print("="*60)
         
-        for probe_mode in PROBE_MODES:
-            print(f"\n  ---> Probing with {probe_mode} ...")
+        # Initialize CSV
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["bg_mode", "probe_mode", "capacity_kt", "slack_kt", "app_usage_kt", "footprint_pct"])
+
+        # Nested loop for the 9 combinations
+        for bg_mode in BG_MODES:
+            print("\n" + "-"*50)
+            print(f" Evaluating Background Workload: {bg_mode.upper()}")
+            print("-" * 50)
             
-            sweep_dir = out_dir / f"bg_{bg_mode}" / f"probe_{probe_mode}"
-            sweep_dir.mkdir(parents=True, exist_ok=True)
-            
-            env = os.environ.copy()
-            env["SWEEP"] = "cpu"
-            env["BG_PROCS"] = str(args.bg_procs)
-            env["BG_IO_MIX"] = str(args.bg_io_mix)
-            env["BG_MEM_MIX"] = str(args.bg_mem_mix)
-            env["BG_INTENSITY"] = str(args.bg_intensity)
-            env["BG_CPU_MODE"] = bg_mode
-            env["PROBE_CPU_MODE"] = probe_mode
-            env["DURATION"] = str(args.duration)
-            env["OUTPUT_DIR"] = str(sweep_dir)
-            env["DISABLE_COLLECTORS"] = "1"
-            
-            # Forward configurations
-            env["DROP_PCT"] = str(args.drop_pct)
-            env["INTERFERENCE_COUNT"] = str(args.interference_count)
-            
-            cmd = ["bash", "scripts/run_loaded_sweep.sh"]
-            try:
-                subprocess.run(cmd, env=env, check=True, capture_output=True, text=True)
-            except subprocess.CalledProcessError as e:
-                sys.stderr.write(f"\n============================================================\n")
-                sys.stderr.write(f"ERROR: run_loaded_sweep.sh failed with exit code {e.returncode}\n")
-                sys.stderr.write(f"Command: {e.cmd}\n")
-                sys.stderr.write(f"--- STDOUT ---\n{e.stdout}\n")
-                sys.stderr.write(f"--- STDERR ---\n{e.stderr}\n")
-                sys.stderr.write(f"============================================================\n")
-                sys.stderr.flush()
+            for probe_mode in PROBE_MODES:
+                print(f"\n  ---> Probing with {probe_mode} ...")
                 
-                # Also write to diagnostic log file in output directory
+                sweep_dir = out_dir / f"bg_{bg_mode}" / f"probe_{probe_mode}"
+                sweep_dir.mkdir(parents=True, exist_ok=True)
+                
+                env = os.environ.copy()
+                env["SWEEP"] = "cpu"
+                env["BG_PROCS"] = str(args.bg_procs)
+                env["BG_IO_MIX"] = str(args.bg_io_mix)
+                env["BG_MEM_MIX"] = str(args.bg_mem_mix)
+                env["BG_INTENSITY"] = str(args.bg_intensity)
+                env["BG_CPU_MODE"] = bg_mode
+                env["PROBE_CPU_MODE"] = probe_mode
+                env["DURATION"] = str(args.duration)
+                env["OUTPUT_DIR"] = str(sweep_dir)
+                env["DISABLE_COLLECTORS"] = "1"
+                
+                # Forward configurations
+                env["DROP_PCT"] = str(args.drop_pct)
+                env["INTERFERENCE_COUNT"] = str(args.interference_count)
+                
+                cmd = ["bash", "scripts/run_loaded_sweep.sh"]
                 try:
-                    with open(out_dir / "sweep_error.log", "w") as ef:
-                        ef.write(f"Command: {e.cmd}\n")
-                        ef.write(f"Exit code: {e.returncode}\n")
-                        ef.write(f"STDOUT:\n{e.stdout}\n")
-                        ef.write(f"STDERR:\n{e.stderr}\n")
-                except Exception as write_err:
-                    sys.stderr.write(f"Failed to write log file: {write_err}\n")
+                    subprocess.run(cmd, env=env, check=True, capture_output=True, text=True)
+                except subprocess.CalledProcessError as e:
+                    sys.stderr.write(f"\n============================================================\n")
+                    sys.stderr.write(f"ERROR: run_loaded_sweep.sh failed with exit code {e.returncode}\n")
+                    sys.stderr.write(f"Command: {e.cmd}\n")
+                    sys.stderr.write(f"--- STDOUT ---\n{e.stdout}\n")
+                    sys.stderr.write(f"--- STDERR ---\n{e.stderr}\n")
+                    sys.stderr.write(f"============================================================\n")
                     sys.stderr.flush()
+                    
+                    # Also write to diagnostic log file in output directory
+                    try:
+                        with open(out_dir / "sweep_error.log", "w") as ef:
+                            ef.write(f"Command: {e.cmd}\n")
+                            ef.write(f"Exit code: {e.returncode}\n")
+                            ef.write(f"STDOUT:\n{e.stdout}\n")
+                            ef.write(f"STDERR:\n{e.stderr}\n")
+                    except Exception as write_err:
+                        sys.stderr.write(f"Failed to write log file: {write_err}\n")
+                        sys.stderr.flush()
+                    
+                    raise e
                 
-                raise e
-            
-            sweep_file = sweep_dir / "sweep_cpu.json"
-            if not sweep_file.exists():
-                print(f"       ERROR: sweep failed to produce {sweep_file}")
-                continue
+                sweep_file = sweep_dir / "sweep_cpu.json"
+                if not sweep_file.exists():
+                    print(f"       ERROR: sweep failed to produce {sweep_file}")
+                    continue
+                    
+                with open(sweep_file) as f:
+                    slack = json.load(f).get("slack_ktokens", 0.0)
+                    
+                cap = capacities[probe_mode]
+                app_usage = cap - slack
+                footprint_pct = (app_usage / cap) * 100 if cap > 0 else 0
                 
-            with open(sweep_file) as f:
-                slack = json.load(f).get("slack_ktokens", 0.0)
+                print(f"       Capacity:  {cap:.2f} kT/s")
+                print(f"       Slack:     {slack:.3f} kT/s")
+                print(f"       Footprint: {footprint_pct:.2f}%")
                 
-            cap = capacities[probe_mode]
-            app_usage = cap - slack
-            footprint_pct = (app_usage / cap) * 100 if cap > 0 else 0
-            
-            print(f"       Capacity:  {cap:.2f} kT/s")
-            print(f"       Slack:     {slack:.3f} kT/s")
-            print(f"       Footprint: {footprint_pct:.2f}%")
-            
-            with open(csv_path, "a", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow([bg_mode, probe_mode, cap, slack, app_usage, footprint_pct])
+                with open(csv_path, "a", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([bg_mode, probe_mode, cap, slack, app_usage, footprint_pct])
 
     print("\n" + "="*60)
     print(" Phase 3: Generate Plot")
