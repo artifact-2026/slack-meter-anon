@@ -40,15 +40,18 @@ IO_MODE="${IO_MODE:-rand_write}"
 RESOURCE_TYPE="${RESOURCE_TYPE:-io}"
 QUEUE_DEPTH="${QUEUE_DEPTH:-1}"
 CPU_MODE="${CPU_MODE:-cpu_int}"
+MEM_MODE="${MEM_MODE:-mem_copy}"
 FILE_SIZE_MIB="${FILE_SIZE_MIB:-256}"
 
 # ---------------------------------------------------------------------------
-# Default --output to results/calibration/cap_<IO_MODE>.json unless the
+# Default --output to results/calibration/cap_<MODE>.json unless the
 # caller already passed --output explicitly in "$@".
 # This ensures no calibration run is ever lost.
 # ---------------------------------------------------------------------------
 if [[ "$RESOURCE_TYPE" == "cpu" ]]; then
     DEFAULT_OUT="$REPO/results/calibration/cap_${CPU_MODE}.json"
+elif [[ "$RESOURCE_TYPE" == "ram" ]]; then
+    DEFAULT_OUT="$REPO/results/calibration/cap_${MEM_MODE}.json"
 else
     DEFAULT_OUT="$REPO/results/calibration/cap_${IO_MODE}.json"
 fi
@@ -67,13 +70,21 @@ if [[ -n "${START_N:-}" ]]; then
     START_N_ARG="--start-n ${START_N}"
 fi
 
+MODE_VAL="$IO_MODE"
+if [[ "$RESOURCE_TYPE" == "cpu" ]]; then
+    MODE_VAL="$CPU_MODE"
+elif [[ "$RESOURCE_TYPE" == "ram" ]]; then
+    MODE_VAL="$MEM_MODE"
+fi
+
 # ---------------------------------------------------------------------------
-log "Running ${RESOURCE_TYPE} saturation sweep (mode: ${IO_MODE}, step: ${STEP}${START_N:+, start-n: ${START_N}}, qd: ${QUEUE_DEPTH})..."
+log "Running ${RESOURCE_TYPE} saturation sweep (mode: ${MODE_VAL}, step: ${STEP}${START_N:+, start-n: ${START_N}}, qd: ${QUEUE_DEPTH})..."
 # shellcheck disable=SC2086
 python3 "$REPO/scripts/saturate.py" \
     --resource-type "$RESOURCE_TYPE" \
     --io-mode "$IO_MODE" \
     --cpu-mode "$CPU_MODE" \
+    --mem-mode "$MEM_MODE" \
     --step "$STEP" \
     --queue-depth "$QUEUE_DEPTH" \
     --file-size-mib "$FILE_SIZE_MIB" \

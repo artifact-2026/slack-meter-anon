@@ -425,20 +425,34 @@ MemState open_mem_buf() {
 // sequential access.  Sequential access is also what maximises DRAM row-buffer
 // hit rate and therefore produces the highest sustainable bandwidth.
 // ----------------------------------------------------------------------------
-void do_mem_work(MemState &st) {
+void do_mem_work(MemState &st, const std::string &mem_mode) {
   if (!st.buf)
     return;
 
   double *lo = st.buf;
   double *hi = st.buf + st.n;
 
-  // Pass 1: read from hi half, write to lo half.
-  for (size_t i = 0; i < st.n; ++i)
-    lo[i] = MEM_SCALAR * hi[i];
+  if (mem_mode == "mem_read") {
+    // Read-only memory access
+    volatile double sum = 0.0;
+    for (size_t i = 0; i < 2 * st.n; ++i) {
+      sum += st.buf[i];
+    }
+  } else if (mem_mode == "mem_write") {
+    // Write-only memory access
+    for (size_t i = 0; i < 2 * st.n; ++i) {
+      st.buf[i] = 3.0;
+    }
+  } else {
+    // default: mem_copy / mem_stream
+    // Pass 1: read from hi half, write to lo half.
+    for (size_t i = 0; i < st.n; ++i)
+      lo[i] = MEM_SCALAR * hi[i];
 
-  // Pass 2: read from lo half, write to hi half.
-  for (size_t i = 0; i < st.n; ++i)
-    hi[i] = MEM_SCALAR * lo[i];
+    // Pass 2: read from lo half, write to hi half.
+    for (size_t i = 0; i < st.n; ++i)
+      hi[i] = MEM_SCALAR * lo[i];
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -631,7 +645,7 @@ WorkloadResult run_workload(const WorkloadParams &params) {
       } else if (n < params.io_mix + params.mem_mix) {
         // MEM phase: hammer memory bandwidth
         while (std::chrono::steady_clock::now() < tick_end) {
-          do_mem_work(mem_state);
+          do_mem_work(mem_state, params.mem_mode);
           ++res.mem_ops;
         }
       } else {

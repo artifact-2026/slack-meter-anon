@@ -73,10 +73,12 @@ def run_probe(
     probe_queue_depth: int = 1,
     bg_cpu_mode:  str = "cpu_int",
     probe_cpu_mode: str = "cpu_int",
+    bg_mem_mode:  str = "mem_copy",
+    probe_mem_mode: str = "mem_copy",
     file_size_bytes: int = 0,
 ) -> tuple[float, float]:
     """Run bg + probe workers concurrently samples times; return median (bg_tput, probe_tput) in ops/s."""
-    def make_cmd(io_mix: float, mem_mix: float, intensity: float, seed: int, mode: str, qd: int, cpu_mode: str) -> list[str]:
+    def make_cmd(io_mix: float, mem_mix: float, intensity: float, seed: int, mode: str, qd: int, cpu_mode: str, mem_mode: str) -> list[str]:
         cmd = [worker_bin,
                "--io-mix",    str(io_mix),
                "--mem-mix",   str(mem_mix),
@@ -87,7 +89,8 @@ def run_probe(
                "--seed",      str(seed),
                "--io-mode",   mode,
                "--queue-depth", str(qd),
-               "--cpu-mode",  cpu_mode]
+               "--cpu-mode",  cpu_mode,
+               "--mem-mode",  mem_mode]
         if file_size_bytes > 0:
             cmd += ["--file-size", str(file_size_bytes)]
         return cmd
@@ -101,8 +104,9 @@ def run_probe(
             env["WORKER_ID"] = str(i)
             env["REUSE_FILE"] = "1"
             actual_bg_cpu = ["cpu_int", "cpu_fp", "cpu_hash"][i % 3] if bg_cpu_mode == "mixed" else bg_cpu_mode
+            actual_bg_mem = ["mem_copy", "mem_read", "mem_write"][i % 3] if bg_mem_mode == "mixed" else bg_mem_mode
             procs.append(subprocess.Popen(
-                make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i + run_idx * 100, bg_io_mode, bg_queue_depth, actual_bg_cpu),
+                make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i + run_idx * 100, bg_io_mode, bg_queue_depth, actual_bg_cpu, actual_bg_mem),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
         probe_idx = 0
         for i in range(n_probe_full):
@@ -110,7 +114,7 @@ def run_probe(
             env["WORKER_ID"] = str(bg_procs + probe_idx)
             env["REUSE_FILE"] = "1"
             procs.append(subprocess.Popen(
-                make_cmd(probe_io_mix, probe_mem_mix, 1.0, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode, probe_queue_depth, probe_cpu_mode),
+                make_cmd(probe_io_mix, probe_mem_mix, 1.0, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode, probe_queue_depth, probe_cpu_mode, probe_mem_mode),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
             probe_idx += 1
         
@@ -119,7 +123,7 @@ def run_probe(
             env["WORKER_ID"] = str(bg_procs + probe_idx)
             env["REUSE_FILE"] = "1"
             procs.append(subprocess.Popen(
-                make_cmd(probe_io_mix, probe_mem_mix, probe_frac, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode, probe_queue_depth, probe_cpu_mode),
+                make_cmd(probe_io_mix, probe_mem_mix, probe_frac, _PROBE_SEED_BASE + probe_idx + run_idx * 100, probe_io_mode, probe_queue_depth, probe_cpu_mode, probe_mem_mode),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
 
         bg_tput = probe_tput = 0.0
@@ -171,6 +175,8 @@ def sweep(
     interference_threshold_count: int = 3,
     bg_cpu_mode:  str = "cpu_int",
     probe_cpu_mode: str = "cpu_int",
+    bg_mem_mode:  str = "mem_copy",
+    probe_mem_mode: str = "mem_copy",
     file_size_bytes: int = 0,
 ) -> dict:
     os.makedirs(tmp_dir, exist_ok=True)
@@ -195,6 +201,7 @@ def sweep(
               bg_io_mode=bg_io_mode, probe_io_mode=probe_io_mode, samples=samples,
               bg_queue_depth=bg_queue_depth, probe_queue_depth=probe_queue_depth,
               bg_cpu_mode=bg_cpu_mode, probe_cpu_mode=probe_cpu_mode,
+              bg_mem_mode=bg_mem_mode, probe_mem_mode=probe_mem_mode,
               file_size_bytes=file_size_bytes)
 
     # ------------------------------------------------------------------
@@ -322,6 +329,9 @@ def main() -> None:
     parser.add_argument("--cpu-mode",     default="cpu_int",         help="Default CPU Mode")
     parser.add_argument("--bg-cpu-mode",  default=None,              help="Background CPU Mode (defaults to --cpu-mode)")
     parser.add_argument("--probe-cpu-mode", default=None,            help="Probe CPU Mode (defaults to --cpu-mode)")
+    parser.add_argument("--mem-mode",     default="mem_copy",        help="Default Memory Mode")
+    parser.add_argument("--bg-mem-mode",  default=None,              help="Background Memory Mode (defaults to --mem-mode)")
+    parser.add_argument("--probe-mem-mode", default=None,            help="Probe Memory Mode (defaults to --mem-mode)")
     parser.add_argument("--output",       default=None,              metavar="FILE")
     parser.add_argument("--plot",         default=None,              metavar="FILE")
     parser.add_argument("--queue-depth",  type=int,   default=1,     metavar="QD",
@@ -351,6 +361,8 @@ def main() -> None:
     probe_qd = args.probe_queue_depth if args.probe_queue_depth is not None else args.queue_depth
     bg_cpu = args.bg_cpu_mode if args.bg_cpu_mode is not None else args.cpu_mode
     probe_cpu = args.probe_cpu_mode if args.probe_cpu_mode is not None else args.cpu_mode
+    bg_mem = args.bg_mem_mode if args.bg_mem_mode is not None else args.mem_mode
+    probe_mem = args.probe_mem_mode if args.probe_mem_mode is not None else args.mem_mode
 
     result = sweep(
         probe_type   = args.probe_type,
@@ -372,6 +384,8 @@ def main() -> None:
         interference_threshold_count= args.interference_threshold_count,
         bg_cpu_mode  = bg_cpu,
         probe_cpu_mode = probe_cpu,
+        bg_mem_mode  = bg_mem,
+        probe_mem_mode = probe_mem,
         file_size_bytes = args.file_size_mib * 1024 * 1024,
     )
 
