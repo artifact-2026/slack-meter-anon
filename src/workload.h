@@ -26,6 +26,7 @@ struct WorkloadParams {
   std::string io_mode; // rand_write | rand_read | rand_read_64k | seq_read
   int queue_depth;     // concurrency level per worker (default: 1)
   std::string cpu_mode; // cpu_int | cpu_fp | cpu_hash
+  std::string mem_mode; // mem_copy | mem_read | mem_write
   size_t file_size;    // scratch file size in bytes (0 → use IO_FILE_SIZE default)
 };
 
@@ -160,7 +161,7 @@ MemState open_mem_buf();
 //   lo[i] = MEM_SCALAR * hi[i]   (hi → lo pass, read+write)
 //   hi[i] = MEM_SCALAR * lo[i]   (lo → hi pass, read+write)
 // Each call saturates the memory bus for one unit of work.
-void do_mem_work(MemState &st);
+void do_mem_work(MemState &st, const std::string &mem_mode);
 
 // Free the buffer and zero the MemState fields.
 void close_mem_buf(MemState &st);

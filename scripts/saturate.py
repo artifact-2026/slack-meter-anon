@@ -60,6 +60,7 @@ def run_workers(
     io_mode: str = "rand_write",
     queue_depth: int = 1,
     cpu_mode: str = "cpu_int",
+    mem_mode: str = "mem_copy",
     tput_key: str = "throughput",
     file_size_bytes: int = 0,
 ) -> float:
@@ -80,6 +81,7 @@ def run_workers(
             "--io-mode",     io_mode,
             "--queue-depth", str(queue_depth),
             "--cpu-mode",    actual_cpu_mode,
+            "--mem-mode",    mem_mode,
         ]
         if file_size_bytes > 0:
             cmd += ["--file-size", str(file_size_bytes)]
@@ -127,6 +129,7 @@ def saturate(
     io_mode: str = "rand_write",
     queue_depth: int = 1,
     cpu_mode: str = "cpu_int",
+    mem_mode: str = "mem_copy",
     step: int = 1,
     start_n: int | None = None,
     file_size_bytes: int = 0,
@@ -144,7 +147,7 @@ def saturate(
         io_mix=io_mix, mem_mix=mem_mix, intensity=intensity,
         duration=duration, warmup=warmup, tmp_dir=tmp_dir,
         worker_bin=worker_bin, io_mode=io_mode, queue_depth=queue_depth,
-        cpu_mode=cpu_mode, tput_key=tput_key,
+        cpu_mode=cpu_mode, mem_mode=mem_mode, tput_key=tput_key,
         file_size_bytes=file_size_bytes,
     )
 
@@ -236,6 +239,8 @@ Mixed workload mode (realistic blend, e.g. before a probe sweep):
                         help="IO mode: rand_write | rand_read | rand_read_64k | seq_read")
     parser.add_argument("--cpu-mode",    default="cpu_int",
                         help="CPU mode: cpu_int | cpu_fp | cpu_hash")
+    parser.add_argument("--mem-mode",    default="mem_copy",
+                        help="Memory mode: mem_copy | mem_read | mem_write")
     parser.add_argument("--file-size-mib", type=int, default=256, metavar="MiB",
                         help="Per-worker scratch file size in MiB (default: 256; try 4096 to exceed SSD DRAM cache)")
 
@@ -304,6 +309,7 @@ Mixed workload mode (realistic blend, e.g. before a probe sweep):
         io_mode          = args.io_mode,
         queue_depth      = args.queue_depth,
         cpu_mode         = args.cpu_mode,
+        mem_mode         = args.mem_mode,
         step             = args.step,
         start_n          = args.start_n,
         file_size_bytes  = args.file_size_mib * 1024 * 1024,

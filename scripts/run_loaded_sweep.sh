@@ -76,6 +76,9 @@ SAMPLES="${SAMPLES:-1}"
 CPU_MODE="${CPU_MODE:-cpu_int}"
 BG_CPU_MODE="${BG_CPU_MODE:-$CPU_MODE}"
 PROBE_CPU_MODE="${PROBE_CPU_MODE:-$CPU_MODE}"
+MEM_MODE="${MEM_MODE:-mem_copy}"
+BG_MEM_MODE="${BG_MEM_MODE:-$MEM_MODE}"
+PROBE_MEM_MODE="${PROBE_MEM_MODE:-$MEM_MODE}"
 SAT_EPSILON="${SAT_EPSILON:-1.025}"
 if [[ -z "${TMP_DIR:-}" ]]; then
     if [[ -d "/holly" && -w "/holly" ]]; then
@@ -131,6 +134,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --probe-cpu-mode)
             PROBE_CPU_MODE="$2"
+            shift 2
+            ;;
+        --bg-mem-mode)
+            BG_MEM_MODE="$2"
+            shift 2
+            ;;
+        --probe-mem-mode)
+            PROBE_MEM_MODE="$2"
             shift 2
             ;;
         --bg-procs)
@@ -291,6 +302,8 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
         --probe-io-mode "$PROBE_IO_MODE" \
         --bg-cpu-mode   "$BG_CPU_MODE"    \
         --probe-cpu-mode "$PROBE_CPU_MODE" \
+        --bg-mem-mode   "$BG_MEM_MODE"    \
+        --probe-mem-mode "$PROBE_MEM_MODE" \
         --bg-queue-depth    "$BG_QUEUE_DEPTH"    \
         --probe-queue-depth "$PROBE_QUEUE_DEPTH" \
         --file-size-mib     "$FILE_SIZE_MIB"     \
@@ -305,6 +318,12 @@ else
             local idx=$(( (i - 1) % 3 ))
             current_cpu_mode="${modes[$idx]}"
         fi
+        local current_mem_mode="$BG_MEM_MODE"
+        if [[ "$BG_MEM_MODE" == "mixed" ]]; then
+            local modes=("mem_copy" "mem_read" "mem_write")
+            local idx=$(( (i - 1) % 3 ))
+            current_mem_mode="${modes[$idx]}"
+        fi
         "$WORKER" \
             --io-mix    "$BG_IO_MIX"    \
             --mem-mix   "$BG_MEM_MIX"   \
@@ -316,6 +335,7 @@ else
             --io-mode   "$BG_IO_MODE"   \
             --queue-depth "$BG_QUEUE_DEPTH"\
             --cpu-mode  "$current_cpu_mode"  \
+            --mem-mode  "$current_mem_mode"  \
             > "$OUTPUT_DIR/bg_worker_${i}.json" &
         BG_PIDS+=($!)
     done
