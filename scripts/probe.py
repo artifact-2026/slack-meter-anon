@@ -100,8 +100,9 @@ def run_probe(
             env = os.environ.copy()
             env["WORKER_ID"] = str(i)
             env["REUSE_FILE"] = "1"
+            actual_bg_cpu = ["cpu_int", "cpu_fp", "cpu_hash"][i % 3] if bg_cpu_mode == "mixed" else bg_cpu_mode
             procs.append(subprocess.Popen(
-                make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i + run_idx * 100, bg_io_mode, bg_queue_depth, bg_cpu_mode),
+                make_cmd(bg_io_mix, bg_mem_mix, bg_intensity, _BG_SEED_BASE + i + run_idx * 100, bg_io_mode, bg_queue_depth, actual_bg_cpu),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
         probe_idx = 0
         for i in range(n_probe_full):

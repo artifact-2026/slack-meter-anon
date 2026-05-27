@@ -299,6 +299,12 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
 else
     log "Starting $BG_PROCS background worker(s)  io_mix=$BG_IO_MIX  mem_mix=$BG_MEM_MIX  intensity=$BG_INTENSITY"
     for i in $(seq 1 "$BG_PROCS"); do
+        local current_cpu_mode="$BG_CPU_MODE"
+        if [[ "$BG_CPU_MODE" == "mixed" ]]; then
+            local modes=("cpu_int" "cpu_fp" "cpu_hash")
+            local idx=$(( (i - 1) % 3 ))
+            current_cpu_mode="${modes[$idx]}"
+        fi
         "$WORKER" \
             --io-mix    "$BG_IO_MIX"    \
             --mem-mix   "$BG_MEM_MIX"   \
@@ -309,7 +315,7 @@ else
             --seed      $((SEED + i))   \
             --io-mode   "$BG_IO_MODE"   \
             --queue-depth "$BG_QUEUE_DEPTH"\
-            --cpu-mode  "$BG_CPU_MODE"  \
+            --cpu-mode  "$current_cpu_mode"  \
             > "$OUTPUT_DIR/bg_worker_${i}.json" &
         BG_PIDS+=($!)
     done

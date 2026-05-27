@@ -357,44 +357,66 @@ def plot_case(
 
 def plot_fungibility_matrix(df: pd.DataFrame, out_path: Path) -> None:
     """
-    Plots a fungibility matrix bar chart showing Normalized App Footprint (%)
-    across different probe modes and background modes.
+    Plots a fungibility matrix showing Normalized App Footprint (%)
+    across different probe modes and background modes/intensities.
     """
-    bg_modes = df["bg_mode"].unique().tolist()
     probe_modes = df["probe_mode"].unique().tolist()
-
-    # Parse dataframe into a structured dict: bg_mode -> {probe_mode: footprint}
-    data = {bg: {pr: 0.0 for pr in probe_modes} for bg in bg_modes}
-    for _, row in df.iterrows():
-        bg = row["bg_mode"]
-        pr = row["probe_mode"]
-        if bg in data and pr in data[bg]:
-            data[bg][pr] = float(row["footprint_pct"])
-
-    fig, ax = plt.subplots(figsize=(11, 6))
-
-    x = np.arange(len(bg_modes))
-    num_probes = len(probe_modes)
-    # Calculate a clean dynamic width
-    width = 0.7 / max(num_probes, 1)
-
-    colors = ['#1565C0', '#E64A19', '#2E7D32', '#6A1B9A', '#c44e52', '#8172b3', '#937860', '#da8bc3']
-
-    for i, probe_mode in enumerate(probe_modes):
-        y_vals = [data[bg_mode][probe_mode] for bg_mode in bg_modes]
-        offset = (i - (num_probes - 1) / 2.0) * width
-        color = colors[i % len(colors)]
-        ax.bar(x + offset, y_vals, width, label=f"Probe: {probe_mode}", 
-               color=color, edgecolor="white", alpha=0.88, zorder=3)
-
-    is_cpu = any("cpu" in str(m).lower() or m in ["cpu_int", "cpu_fp", "cpu_hash"] for m in bg_modes + probe_modes)
+    is_cpu = any("cpu" in str(m).lower() or m in ["cpu_int", "cpu_fp", "cpu_hash"] for m in df["bg_mode"].unique().tolist() + probe_modes)
     title_prefix = "CPU " if is_cpu else "I/O "
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    if "bg_intensity" in df.columns:
+        # Line plot for varying intensity
+        intensities = sorted(df["bg_intensity"].unique().tolist())
+        data = {pr: {} for pr in probe_modes}
+        for _, row in df.iterrows():
+            pr = row["probe_mode"]
+            intensity = float(row["bg_intensity"])
+            footprint = float(row["footprint_pct"])
+            data[pr][intensity] = footprint
+
+        colors = ['#1565C0', '#E64A19', '#2E7D32', '#6A1B9A', '#c44e52', '#8172b3', '#937860', '#da8bc3']
+        markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p']
+
+        for i, probe_mode in enumerate(probe_modes):
+            y_vals = [data[probe_mode].get(intensity, np.nan) for intensity in intensities]
+            color = colors[i % len(colors)]
+            marker = markers[i % len(markers)]
+            ax.plot(intensities, y_vals, marker=marker, color=color, label=f"Probe: {probe_mode}",
+                    linewidth=2.5, markersize=8, alpha=0.88)
+
+        ax.set_xlabel("Background Workload Intensity", fontsize=11, fontweight="bold")
+        ax.xaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0))
+    else:
+        # Grouped bar chart for varying background modes
+        bg_modes = df["bg_mode"].unique().tolist()
+        data = {bg: {pr: 0.0 for pr in probe_modes} for bg in bg_modes}
+        for _, row in df.iterrows():
+            bg = row["bg_mode"]
+            pr = row["probe_mode"]
+            if bg in data and pr in data[bg]:
+                data[bg][pr] = float(row["footprint_pct"])
+
+        x = np.arange(len(bg_modes))
+        num_probes = len(probe_modes)
+        width = 0.7 / max(num_probes, 1)
+
+        colors = ['#1565C0', '#E64A19', '#2E7D32', '#6A1B9A', '#c44e52', '#8172b3', '#937860', '#da8bc3']
+
+        for i, probe_mode in enumerate(probe_modes):
+            y_vals = [data[bg_mode][probe_mode] for bg_mode in bg_modes]
+            offset = (i - (num_probes - 1) / 2.0) * width
+            color = colors[i % len(colors)]
+            ax.bar(x + offset, y_vals, width, label=f"Probe: {probe_mode}", 
+                   color=color, edgecolor="white", alpha=0.88, zorder=3)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"BG Workload:\n{m}" for m in bg_modes], fontsize=10)
 
     ax.set_ylabel("Normalized App Footprint (%)\n(Capacity - Slack) / Capacity", fontsize=11, fontweight="bold")
     ax.set_title(f"{title_prefix}Unit of Measure Fungibility:\nFootprint Measurement Invariance Across Different Probes", 
-                 fontsize=13, fontweight="bold", pad=15)
-    ax.set_xticks(x)
-    ax.set_xticklabels([f"BG Workload:\n{m}" for m in bg_modes], fontsize=10)
+                 fontsize=12, fontweight="bold", pad=15)
     ax.legend(title="Unit of Measure (Probe)", loc="upper left", bbox_to_anchor=(1, 1))
 
     min_pct = df["footprint_pct"].min()
@@ -404,7 +426,7 @@ def plot_fungibility_matrix(df: pd.DataFrame, out_path: Path) -> None:
     ax.set_ylim(min_y, max_y)
 
     ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=100.0))
-    ax.grid(axis='y', linestyle=':', alpha=0.7, zorder=0)
+    ax.grid(True, linestyle=':', alpha=0.7)
     ax.spines[["top", "right"]].set_visible(False)
 
     fig.tight_layout()
