@@ -67,7 +67,7 @@ def run_workers(
     msg = f"Running {num_full_workers} worker(s)"
     print(f"{msg}... ", end="", flush=True)
 
-    def make_cmd(seed: int) -> list[str]:
+    def make_cmd(seed: int, actual_cpu_mode: str) -> list[str]:
         cmd = [
             worker_bin,
             "--io-mix",      str(io_mix),
@@ -79,17 +79,17 @@ def run_workers(
             "--seed",        str(seed),
             "--io-mode",     io_mode,
             "--queue-depth", str(queue_depth),
-            "--cpu-mode",    cpu_mode,
+            "--cpu-mode",    actual_cpu_mode,
         ]
         if file_size_bytes > 0:
             cmd += ["--file-size", str(file_size_bytes)]
         return cmd
 
-    processes = [
-        subprocess.Popen(make_cmd(1337 + i),
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        for i in range(num_full_workers)
-    ]
+    processes = []
+    for i in range(num_full_workers):
+        actual_cpu = ["cpu_int", "cpu_fp", "cpu_hash"][i % 3] if cpu_mode == "mixed" else cpu_mode
+        processes.append(subprocess.Popen(make_cmd(1337 + i, actual_cpu),
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
 
     total = 0.0
     for p in processes:

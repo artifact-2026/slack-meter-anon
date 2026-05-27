@@ -70,37 +70,59 @@ def plot_matrix(csv_path, out_plot):
         print("\n[Warning] matplotlib not installed. Data saved to CSV, but skipping plot.")
         return
 
-    # Parse CSV: bg_mode -> {probe_mode: footprint}
-    data = {bg: {pr: 0.0 for pr in PROBE_MODES} for bg in BG_MODES}
+    # Parse CSV: probe_mode -> {bg_intensity: footprint}
+    data = {}
+    intensities = set()
+    footprints = []
     
     with open(csv_path, "r") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            bg = row["bg_mode"]
             pr = row["probe_mode"]
-            if bg in data and pr in data[bg]:
-                data[bg][pr] = float(row["footprint_pct"])
+            intensity = float(row["bg_intensity"])
+            footprint = float(row["footprint_pct"])
+            intensities.add(intensity)
+            footprints.append(footprint)
+            if pr not in data:
+                data[pr] = {}
+            data[pr][intensity] = footprint
 
-    fig, ax = plt.subplots(figsize=(11, 6))
+    sorted_intensities = sorted(list(intensities))
     
-    x = np.arange(len(BG_MODES))
-    width = 0.20
-    colors = ['#4c72b0', '#dd8452', '#55a868']
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    colors = ['#1565C0', '#E64A19', '#2E7D32', '#6A1B9A']
+    markers = ['o', 's', '^', 'D']
     
     for i, probe_mode in enumerate(PROBE_MODES):
-        y_vals = [data[bg_mode][probe_mode] for bg_mode in BG_MODES]
-        offset = (i - 1.0) * width
-        ax.bar(x + offset, y_vals, width, label=f"Probe: {probe_mode}", 
-               color=colors[i], edgecolor="white", zorder=3)
+        if probe_mode not in data:
+            continue
+        y_vals = [data[probe_mode].get(intensity, np.nan) for intensity in sorted_intensities]
+        ax.plot(sorted_intensities, y_vals, marker=markers[i % len(markers)], 
+                color=colors[i % len(colors)], label=f"Probe: {probe_mode}", 
+                linewidth=2.5, markersize=8)
         
     ax.set_ylabel("Normalized App Footprint (%)\n(Capacity - Slack) / Capacity", fontsize=11, fontweight="bold")
-    ax.set_title("CPU Unit of Measure Fungibility:\nFootprint Measurement Invariance Across Different Probes", 
-                 fontsize=13, fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels([f"BG Workload:\n{m}" for m in BG_MODES], fontsize=10)
+    ax.set_xlabel("Background CPU Workload Intensity", fontsize=11, fontweight="bold")
+    ax.set_title("CPU Unit of Measure Fungibility:\nFootprint Measurement Invariance Across Different Probes and Intensities", 
+                 fontsize=12, fontweight="bold", pad=15)
+    
+    import matplotlib.ticker as ticker
+    ax.xaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0))
+    ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=100.0))
+    
     ax.legend(title="Unit of Measure (Probe)", loc="upper left", bbox_to_anchor=(1, 1))
-    ax.set_ylim(0, 105)
-    ax.grid(axis='y', linestyle=':', alpha=0.7, zorder=0)
+    
+    min_pct = min(footprints) if footprints else 0.0
+    max_pct = max(footprints) if footprints else 100.0
+    min_y = min(0.0, min_pct - 5.0)
+    max_y = max(105.0, max_pct + 5.0)
+    ax.set_ylim(min_y, max_y)
+    if sorted_intensities:
+        ax.set_xlim(min(sorted_intensities) - 0.05, max(sorted_intensities) + 0.05)
+    
+    ax.grid(True, linestyle=':', alpha=0.7)
+    ax.spines[["top", "right"]].set_visible(False)
     
     fig.tight_layout()
     fig.savefig(out_plot, dpi=150)
@@ -122,11 +144,12 @@ def clean_scratch_files():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test 3x3 CPU Fungibility Matrix.")
+    parser = argparse.ArgumentParser(description="Test CPU Fungibility Matrix with mixed background at varying intensities.")
     parser.add_argument("--bg-procs", type=int, default=8)
     parser.add_argument("--bg-io-mix", type=float, default=0.0) # CPU tests default to 0.0 IO mix
     parser.add_argument("--bg-mem-mix", type=float, default=0.0)
-    parser.add_argument("--bg-intensity", type=float, default=0.75)
+    parser.add_argument("--bg-intensities", type=str, default="0.2,0.4,0.6,0.8",
+                        help="comma-separated list of background CPU intensities to sweep (default: 0.2,0.4,0.6,0.8)")
     parser.add_argument("--duration", type=int, default=60)
     parser.add_argument("--out-dir", type=str, default="results/fungibility_matrix_cpu")
     parser.add_argument("--capacities", type=str, default=None,
@@ -162,29 +185,32 @@ def main():
             print(f"  {p}")
         sys.exit(1)
 
+    # Parse intensities to sweep
+    intensities = [float(x.strip()) for x in args.bg_intensities.split(",") if x.strip()]
+
     # Load capacities (either from CLI, file, or preexisting calibration artifacts)
     if not args.only_plot:
         capacities = load_capacities(PROBE_MODES, args.capacity_file, args.capacities, out_dir)
 
         print("\n" + "="*60)
-        print(" Phase 2: Probe Slack for 3x3 Matrix")
+        print(" Phase 2: Probe Slack for CPU Fungibility Matrix")
         print("="*60)
         
         # Initialize CSV
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["bg_mode", "probe_mode", "capacity_kt", "slack_kt", "app_usage_kt", "footprint_pct"])
+            writer.writerow(["bg_mode", "probe_mode", "bg_intensity", "capacity_kt", "slack_kt", "app_usage_kt", "footprint_pct"])
 
-        # Nested loop for the 9 combinations
-        for bg_mode in BG_MODES:
+        # Loop over intensities
+        for intensity in intensities:
             print("\n" + "-"*50)
-            print(f" Evaluating Background Workload: {bg_mode.upper()}")
+            print(f" Evaluating Mixed Background Workload at Intensity: {intensity:.2f}")
             print("-" * 50)
             
             for probe_mode in PROBE_MODES:
                 print(f"\n  ---> Probing with {probe_mode} ...")
                 
-                sweep_dir = out_dir / f"bg_{bg_mode}" / f"probe_{probe_mode}"
+                sweep_dir = out_dir / f"bg_intensity_{intensity:.2f}" / f"probe_{probe_mode}"
                 sweep_dir.mkdir(parents=True, exist_ok=True)
                 
                 env = os.environ.copy()
@@ -192,8 +218,8 @@ def main():
                 env["BG_PROCS"] = str(args.bg_procs)
                 env["BG_IO_MIX"] = str(args.bg_io_mix)
                 env["BG_MEM_MIX"] = str(args.bg_mem_mix)
-                env["BG_INTENSITY"] = str(args.bg_intensity)
-                env["BG_CPU_MODE"] = bg_mode
+                env["BG_INTENSITY"] = str(intensity)
+                env["BG_CPU_MODE"] = "mixed"
                 env["PROBE_CPU_MODE"] = probe_mode
                 env["DURATION"] = str(args.duration)
                 env["OUTPUT_DIR"] = str(sweep_dir)
@@ -246,7 +272,7 @@ def main():
                 
                 with open(csv_path, "a", newline="") as f:
                     writer = csv.writer(f)
-                    writer.writerow([bg_mode, probe_mode, cap, slack, app_usage, footprint_pct])
+                    writer.writerow(["mixed", probe_mode, intensity, cap, slack, app_usage, footprint_pct])
 
     print("\n" + "="*60)
     print(" Phase 3: Generate Plot")
