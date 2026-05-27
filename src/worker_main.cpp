@@ -22,7 +22,8 @@ static void usage(const char* prog) {
     fprintf(stderr,
         "Usage: %s [--io-mix <float>] [--mem-mix <float>] [--intensity <float>]\n"
         "          [--duration <secs>] [--tmp-dir <path>] [--io-mode <mode>]\n"
-        "          [--queue-depth <depth>] [--cpu-mode <mode>]\n",
+        "          [--queue-depth <depth>] [--cpu-mode <mode>]\n"
+        "          [--file-size <bytes>]  (default: 256 MiB; try 4294967296 for 4 GiB)\n",
         prog);
 }
 
@@ -38,6 +39,7 @@ int main(int argc, char* argv[]) {
     params.io_mode       = "rand_write";
     params.queue_depth   = 1;
     params.cpu_mode      = "cpu_int";
+    params.file_size     = 0;  // 0 → run_workload uses IO_FILE_SIZE (256 MiB)
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--io-mix") == 0 && i + 1 < argc) {
@@ -60,6 +62,8 @@ int main(int argc, char* argv[]) {
             params.queue_depth = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--cpu-mode") == 0 && i + 1 < argc) {
             params.cpu_mode = argv[++i];
+        } else if (strcmp(argv[i], "--file-size") == 0 && i + 1 < argc) {
+            params.file_size = (size_t)strtoull(argv[++i], nullptr, 10);
         } else {
             usage(argv[0]);
             return 1;

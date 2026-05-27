@@ -61,13 +61,14 @@ def run_workers(
     queue_depth: int = 1,
     cpu_mode: str = "cpu_int",
     tput_key: str = "throughput",
+    file_size_bytes: int = 0,
 ) -> float:
     """Spawn *num_full_workers* workers in parallel; return total throughput (ops/s)."""
     msg = f"Running {num_full_workers} worker(s)"
     print(f"{msg}... ", end="", flush=True)
 
     def make_cmd(seed: int) -> list[str]:
-        return [
+        cmd = [
             worker_bin,
             "--io-mix",      str(io_mix),
             "--mem-mix",     str(mem_mix),
@@ -80,6 +81,9 @@ def run_workers(
             "--queue-depth", str(queue_depth),
             "--cpu-mode",    cpu_mode,
         ]
+        if file_size_bytes > 0:
+            cmd += ["--file-size", str(file_size_bytes)]
+        return cmd
 
     processes = [
         subprocess.Popen(make_cmd(1337 + i),
@@ -125,6 +129,7 @@ def saturate(
     cpu_mode: str = "cpu_int",
     step: int = 1,
     start_n: int | None = None,
+    file_size_bytes: int = 0,
 ) -> dict:
     """
     Sweep worker concurrency until throughput stagnates.
@@ -140,6 +145,7 @@ def saturate(
         duration=duration, warmup=warmup, tmp_dir=tmp_dir,
         worker_bin=worker_bin, io_mode=io_mode, queue_depth=queue_depth,
         cpu_mode=cpu_mode, tput_key=tput_key,
+        file_size_bytes=file_size_bytes,
     )
 
     MAX_STAGNATION = 5
@@ -230,6 +236,8 @@ Mixed workload mode (realistic blend, e.g. before a probe sweep):
                         help="IO mode: rand_write | rand_read | rand_read_64k | seq_read")
     parser.add_argument("--cpu-mode",    default="cpu_int",
                         help="CPU mode: cpu_int | cpu_fp | cpu_hash")
+    parser.add_argument("--file-size-mib", type=int, default=256, metavar="MiB",
+                        help="Per-worker scratch file size in MiB (default: 256; try 4096 to exceed SSD DRAM cache)")
 
     # Infra
     default_tmp = (
@@ -280,24 +288,25 @@ Mixed workload mode (realistic blend, e.g. before a probe sweep):
     else:
         print(f"  Saturate — mixed workload  io_mix={io_mix}  mem_mix={mem_mix}  intensity={intensity}")
     print("=" * 60)
-    print(f"  Duration : {args.duration}s   step={args.step}   queue_depth={args.queue_depth}")
+    print(f"  Duration : {args.duration}s   step={args.step}   queue_depth={args.queue_depth}   file_size={args.file_size_mib} MiB")
     print(f"  Tmp dir  : {args.tmp_dir}")
     print("=" * 60)
 
     result = saturate(
-        io_mix      = io_mix,
-        mem_mix     = mem_mix,
-        intensity   = intensity,
-        tput_key    = tput_key,
-        duration    = args.duration,
-        warmup      = args.warmup,
-        tmp_dir     = args.tmp_dir,
-        worker_bin  = args.worker_bin,
-        io_mode     = args.io_mode,
-        queue_depth = args.queue_depth,
-        cpu_mode    = args.cpu_mode,
-        step        = args.step,
-        start_n     = args.start_n,
+        io_mix           = io_mix,
+        mem_mix          = mem_mix,
+        intensity        = intensity,
+        tput_key         = tput_key,
+        duration         = args.duration,
+        warmup           = args.warmup,
+        tmp_dir          = args.tmp_dir,
+        worker_bin       = args.worker_bin,
+        io_mode          = args.io_mode,
+        queue_depth      = args.queue_depth,
+        cpu_mode         = args.cpu_mode,
+        step             = args.step,
+        start_n          = args.start_n,
+        file_size_bytes  = args.file_size_mib * 1024 * 1024,
     )
 
     print("=" * 60)

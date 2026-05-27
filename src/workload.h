@@ -26,6 +26,7 @@ struct WorkloadParams {
   std::string io_mode; // rand_write | rand_read | rand_read_64k | seq_read
   int queue_depth;     // concurrency level per worker (default: 1)
   std::string cpu_mode; // cpu_int | cpu_fp | cpu_hash
+  size_t file_size;    // scratch file size in bytes (0 → use IO_FILE_SIZE default)
 };
 
 // ----------------------------------------------------------------------------

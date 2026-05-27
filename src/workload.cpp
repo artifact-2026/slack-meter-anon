@@ -471,7 +471,8 @@ WorkloadResult run_workload(const WorkloadParams &params) {
   std::uniform_real_distribution<double> dist(0.0, 1.0);
 
   // Open the per-worker scratch file once for the duration of the run.
-  IoState io_state = open_io_file(params.tmp_dir, params.io_mode, params.queue_depth, IO_FILE_SIZE);
+  const size_t fsize = (params.file_size > 0) ? params.file_size : IO_FILE_SIZE;
+  IoState io_state = open_io_file(params.tmp_dir, params.io_mode, params.queue_depth, fsize);
   if (io_state.fd < 0) {
     fprintf(stderr, "[worker] open_io_file failed for dir %s\n",
             params.tmp_dir.c_str());
