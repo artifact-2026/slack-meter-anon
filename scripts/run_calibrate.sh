@@ -40,6 +40,7 @@ IO_MODE="${IO_MODE:-rand_write}"
 RESOURCE_TYPE="${RESOURCE_TYPE:-io}"
 QUEUE_DEPTH="${QUEUE_DEPTH:-1}"
 CPU_MODE="${CPU_MODE:-cpu_int}"
+FILE_SIZE_MIB="${FILE_SIZE_MIB:-256}"
 
 # ---------------------------------------------------------------------------
 # Default --output to results/calibration/cap_<IO_MODE>.json unless the
@@ -75,6 +76,7 @@ python3 "$REPO/scripts/saturate.py" \
     --cpu-mode "$CPU_MODE" \
     --step "$STEP" \
     --queue-depth "$QUEUE_DEPTH" \
+    --file-size-mib "$FILE_SIZE_MIB" \
     $START_N_ARG \
     $OUTPUT_ARG \
     "$@"

@@ -73,20 +73,24 @@ def run_probe(
     probe_queue_depth: int = 1,
     bg_cpu_mode:  str = "cpu_int",
     probe_cpu_mode: str = "cpu_int",
+    file_size_bytes: int = 0,
 ) -> tuple[float, float]:
     """Run bg + probe workers concurrently samples times; return median (bg_tput, probe_tput) in ops/s."""
     def make_cmd(io_mix: float, mem_mix: float, intensity: float, seed: int, mode: str, qd: int, cpu_mode: str) -> list[str]:
-        return [worker_bin,
-                "--io-mix",    str(io_mix),
-                "--mem-mix",   str(mem_mix),
-                "--intensity", str(intensity),
-                "--duration",  str(duration),
-                "--warmup",    str(warmup),
-                "--tmp-dir",   tmp_dir,
-                "--seed",      str(seed),
-                "--io-mode",   mode,
-                "--queue-depth", str(qd),
-                "--cpu-mode",  cpu_mode]
+        cmd = [worker_bin,
+               "--io-mix",    str(io_mix),
+               "--mem-mix",   str(mem_mix),
+               "--intensity", str(intensity),
+               "--duration",  str(duration),
+               "--warmup",    str(warmup),
+               "--tmp-dir",   tmp_dir,
+               "--seed",      str(seed),
+               "--io-mode",   mode,
+               "--queue-depth", str(qd),
+               "--cpu-mode",  cpu_mode]
+        if file_size_bytes > 0:
+            cmd += ["--file-size", str(file_size_bytes)]
+        return cmd
 
     runs: list[tuple[float, float]] = []
 
@@ -166,6 +170,7 @@ def sweep(
     interference_threshold_count: int = 3,
     bg_cpu_mode:  str = "cpu_int",
     probe_cpu_mode: str = "cpu_int",
+    file_size_bytes: int = 0,
 ) -> dict:
     os.makedirs(tmp_dir, exist_ok=True)
     
@@ -185,10 +190,11 @@ def sweep(
  
     kw = dict(bg_procs=bg_procs, bg_io_mix=bg_io_mix, bg_mem_mix=bg_mem_mix, bg_intensity=bg_intensity,
               probe_io_mix=probe_io_mix, probe_mem_mix=probe_mem_mix,
-              duration=duration, warmup=warmup, tmp_dir=tmp_dir, worker_bin=worker_bin, tput_key=tput_key, 
+              duration=duration, warmup=warmup, tmp_dir=tmp_dir, worker_bin=worker_bin, tput_key=tput_key,
               bg_io_mode=bg_io_mode, probe_io_mode=probe_io_mode, samples=samples,
               bg_queue_depth=bg_queue_depth, probe_queue_depth=probe_queue_depth,
-              bg_cpu_mode=bg_cpu_mode, probe_cpu_mode=probe_cpu_mode)
+              bg_cpu_mode=bg_cpu_mode, probe_cpu_mode=probe_cpu_mode,
+              file_size_bytes=file_size_bytes)
 
     # ------------------------------------------------------------------
     # Phase 0: baseline
@@ -323,6 +329,8 @@ def main() -> None:
                         help="queue depth/concurrency per background worker (defaults to --queue-depth)")
     parser.add_argument("--probe-queue-depth", type=int, default=None, metavar="QD",
                         help="queue depth/concurrency per probe worker (defaults to --queue-depth)")
+    parser.add_argument("--file-size-mib", type=int, default=256, metavar="MiB",
+                        help="Per-worker scratch file size in MiB (default: 256; try 4096 to exceed SSD DRAM cache)")
     args = parser.parse_args()
 
     if not os.path.exists(args.worker_bin):
@@ -334,7 +342,7 @@ def main() -> None:
     print("=" * 60)
     print(f"  Background : {args.bg_procs} workers  "
           f"io={args.bg_io_mix}  mem={args.bg_mem_mix}  intensity={args.bg_intensity}")
-    print(f"  Probe dur  : {args.duration}s   drop_pct={args.drop_pct*100:.0f}%")
+    print(f"  Probe dur  : {args.duration}s   drop_pct={args.drop_pct*100:.0f}%   file_size={args.file_size_mib} MiB")
     print(f"  Tmp dir    : {args.tmp_dir}")
     print("=" * 60)
 
@@ -363,6 +371,7 @@ def main() -> None:
         interference_threshold_count= args.interference_threshold_count,
         bg_cpu_mode  = bg_cpu,
         probe_cpu_mode = probe_cpu,
+        file_size_bytes = args.file_size_mib * 1024 * 1024,
     )
 
     print("\n" + "=" * 60)

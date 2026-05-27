@@ -96,6 +96,7 @@ BG_PROCS="${BG_PROCS:-4}"
 BG_IO_MIX="${BG_IO_MIX:-$IO_MIX}"
 BG_MEM_MIX="${BG_MEM_MIX:-0.0}"
 BG_INTENSITY="${BG_INTENSITY:-$INTENSITY}"
+FILE_SIZE_MIB="${FILE_SIZE_MIB:-256}"
 
 # Parse command-line arguments to override environment variables/defaults
 while [[ $# -gt 0 ]]; do
@@ -158,6 +159,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --probe-queue-depth)
             PROBE_QUEUE_DEPTH="$2"
+            shift 2
+            ;;
+        --file-size-mib)
+            FILE_SIZE_MIB="$2"
             shift 2
             ;;
         *)
@@ -288,6 +293,7 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
         --probe-cpu-mode "$PROBE_CPU_MODE" \
         --bg-queue-depth    "$BG_QUEUE_DEPTH"    \
         --probe-queue-depth "$PROBE_QUEUE_DEPTH" \
+        --file-size-mib     "$FILE_SIZE_MIB"     \
         --output       "$OUTPUT_DIR/sweep_${SWEEP}.json" \
         --plot         "$OUTPUT_DIR/slack_result_${SWEEP}.png"
 else
