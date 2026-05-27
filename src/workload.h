@@ -24,6 +24,7 @@ struct WorkloadParams {
   std::string tmp_dir; // scratch space for I/O ops
   uint64_t seed;       // RNG seed (fixed for reproducibility)
   std::string io_mode; // rand_write | rand_read | rand_read_64k | seq_read
+                       // | rand_rw | RW_balanced  (R_heavy, W_heavy TBD)
   int queue_depth;     // concurrency level per worker (default: 1)
   std::string cpu_mode; // cpu_int | cpu_fp | cpu_hash
   std::string mem_mode; // mem_copy | mem_read | mem_write
@@ -96,11 +97,17 @@ static constexpr size_t IO_FILE_SIZE = 256ULL * 1024 * 1024; // 256 MiB
 IoState open_io_file(const std::string &tmp_dir, const std::string &io_mode,
                      int queue_depth, size_t file_size = IO_FILE_SIZE);
 
-// Issue one 4 KiB O_DIRECT write to a random aligned offset within the file.
-// rng is the caller's existing generator — no extra state needed.
-// No fsync — matches the durability semantics of the read variants so that
-// rand_write measures raw storage-layer IOPS, not the durability pipeline.
+// One read-modify-write (RMW) op on a random 4 KiB block: pread the block,
+// mutate one 8-byte word per 512-byte sector (defeats sub-block dedup), then
+// pwrite the buffer back to the same offset.  The whole RMW is counted as
+// one op — this is the "RW_balanced" io_mode.  No fsync.
 void do_io_work(IoState &st, std::mt19937_64 &rng);
+
+// One 4 KiB O_DIRECT write to a random aligned offset within the file
+// (legacy "rand_write" io_mode).  Mutates one 8-byte word per 512-byte
+// sector before pwrite to defeat sub-block dedup.  No read leg, no fsync —
+// measures raw storage-layer write IOPS, not the durability pipeline.
+void do_io_write_work(IoState &st, std::mt19937_64 &rng);
 
 // Issue one 4 KiB O_DIRECT read from a random aligned offset within the file.
 // Symmetric counterpart to do_io_work; measures random-read IOPS on the same
