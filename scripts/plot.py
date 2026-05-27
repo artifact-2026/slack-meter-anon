@@ -352,6 +352,70 @@ def plot_case(
 
 
 # ---------------------------------------------------------------------------
+# Fungibility matrix plotter
+# ---------------------------------------------------------------------------
+
+def plot_fungibility_matrix(df: pd.DataFrame, out_path: Path) -> None:
+    """
+    Plots a fungibility matrix bar chart showing Normalized App Footprint (%)
+    across different probe modes and background modes.
+    """
+    bg_modes = df["bg_mode"].unique().tolist()
+    probe_modes = df["probe_mode"].unique().tolist()
+
+    # Parse dataframe into a structured dict: bg_mode -> {probe_mode: footprint}
+    data = {bg: {pr: 0.0 for pr in probe_modes} for bg in bg_modes}
+    for _, row in df.iterrows():
+        bg = row["bg_mode"]
+        pr = row["probe_mode"]
+        if bg in data and pr in data[bg]:
+            data[bg][pr] = float(row["footprint_pct"])
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+
+    x = np.arange(len(bg_modes))
+    num_probes = len(probe_modes)
+    # Calculate a clean dynamic width
+    width = 0.7 / max(num_probes, 1)
+
+    colors = ['#1565C0', '#E64A19', '#2E7D32', '#6A1B9A', '#c44e52', '#8172b3', '#937860', '#da8bc3']
+
+    for i, probe_mode in enumerate(probe_modes):
+        y_vals = [data[bg_mode][probe_mode] for bg_mode in bg_modes]
+        offset = (i - (num_probes - 1) / 2.0) * width
+        color = colors[i % len(colors)]
+        ax.bar(x + offset, y_vals, width, label=f"Probe: {probe_mode}", 
+               color=color, edgecolor="white", alpha=0.88, zorder=3)
+
+    is_cpu = any("cpu" in str(m).lower() or m in ["cpu_int", "cpu_fp", "cpu_hash"] for m in bg_modes + probe_modes)
+    title_prefix = "CPU " if is_cpu else "I/O "
+
+    ax.set_ylabel("Normalized App Footprint (%)\n(Capacity - Slack) / Capacity", fontsize=11, fontweight="bold")
+    ax.set_title(f"{title_prefix}Unit of Measure Fungibility:\nFootprint Measurement Invariance Across Different Probes", 
+                 fontsize=13, fontweight="bold", pad=15)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"BG Workload:\n{m}" for m in bg_modes], fontsize=10)
+    ax.legend(title="Unit of Measure (Probe)", loc="upper left", bbox_to_anchor=(1, 1))
+
+    min_pct = df["footprint_pct"].min()
+    max_pct = df["footprint_pct"].max()
+    min_y = min(0.0, min_pct - 5.0) if not pd.isna(min_pct) else 0.0
+    max_y = max(105.0, max_pct + 5.0) if not pd.isna(max_pct) else 105.0
+    ax.set_ylim(min_y, max_y)
+
+    ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=100.0))
+    ax.grid(axis='y', linestyle=':', alpha=0.7, zorder=0)
+    ax.spines[["top", "right"]].set_visible(False)
+
+    fig.tight_layout()
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    print(f"[plot] Saved fungibility matrix plot → {out_path}")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -376,6 +440,23 @@ def main() -> None:
         raise SystemExit(f"[ERROR] CSV not found: {csv_path}")
 
     df = pd.read_csv(csv_path)
+
+    # If it is a fungibility matrix results CSV
+    if "bg_mode" in df.columns and "probe_mode" in df.columns:
+        if "footprint_pct" in df.columns:
+            df["footprint_pct"] = pd.to_numeric(df["footprint_pct"], errors="coerce")
+        out_path = Path(args.out_dir) / "fungibility_plot.png"
+        plot_fungibility_matrix(df, out_path)
+        
+        # Also save to the CSV directory if it's different from out_dir
+        csv_dir = csv_path.parent
+        if csv_dir.resolve() != Path(args.out_dir).resolve():
+            alt_path = csv_dir / "fungibility_plot.png"
+            try:
+                plot_fungibility_matrix(df, alt_path)
+            except Exception as e:
+                print(f"[Warning] Could not save copy to {alt_path}: {e}")
+        return
 
     # Coerce numeric columns (guards against stray commas like "0.953,,0.4303")
     for col in ["io_mix", "duty_cycle", "saturation_n",
