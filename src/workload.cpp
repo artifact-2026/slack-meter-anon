@@ -240,26 +240,77 @@ IoState open_io_file(const std::string &tmp_dir,
 }
 
 // ----------------------------------------------------------------------------
-// do_io_work – issue one 4 KiB O_DIRECT write to a random aligned offset,
-// followed by fsync to match the original durability semantics.
+// do_io_work – one read-modify-write (RMW) op on a random 4 KiB block.
 //
-// pwrite is used instead of lseek + write to avoid touching the file-position
-// state (cleaner, and avoids a potential serialisation point in the kernel
-// if multiple threads ever shared the same fd).
+// Backs the "RW_balanced" io_mode: each op is exactly one read of a 4 KiB
+// block from a random aligned offset, an in-memory mutation of the first
+// 8-byte word of each of the 8 sectors (defeats sub-block dedup so the write
+// leg actually hits the device), and a write of the same buffer back to the
+// same offset.  The whole read+modify+write is counted as a single op so
+// io_ops/sec is directly comparable to pure-read or pure-write IOPS at the
+// "logical operation" level (with the caveat that each op consumes both a
+// read and a write at the device).
+//
+// Symmetric counterparts:
+//   do_io_read_work  – 4 KiB pure read       (R-only)
+//   do_io_write_work – 4 KiB pure write      (W-only, used by rand_write)
+//
+// pread/pwrite are used instead of lseek+read/write so the file-position
+// state is untouched (no serialisation point if multiple threads ever share
+// the same fd).
 // ----------------------------------------------------------------------------
 void do_io_work(IoState &st, std::mt19937_64 &rng) {
   if (st.fd < 0 || !st.buf)
     return;
 
-  // Mutate one 8-byte word per 512-byte sector to defeat both block-level
-  // deduplication and any aggressive sub-block / sector-level deduplication.
-  // The cost of 8 fast RNG calls (~16ns) is invisible next to the I/O latency.
+  // Pick the offset once — both the read and the write target the same block.
+  const off_t offset = (off_t)((rng() % st.num_blocks) * IO_BUF_SIZE);
+
+  // ---- R leg: pull the 4 KiB block into our aligned buffer ----------------
+  ssize_t r = pread(st.fd, st.buf, IO_BUF_SIZE, offset);
+  if (r != (ssize_t)IO_BUF_SIZE) {
+    perror("pread (RW_balanced)");
+    abort();
+  }
+
+  // ---- M leg: mutate one 8-byte word per 512-byte sector ------------------
+  // Same dedup-defeating trick used by do_io_write_work — without it a smart
+  // storage layer could short-circuit the write when the buffer matches what
+  // is already on disk.  8 fast RNG calls (~16 ns) are invisible next to the
+  // ~10 µs NVMe round trip.
   uint64_t *buf_ptr = static_cast<uint64_t *>(st.buf);
   for (int i = 0; i < 8; ++i) {
     buf_ptr[i * (512 / sizeof(uint64_t))] = rng();
   }
 
-  // Random 4 KiB-aligned offset within the pre-allocated file.
+  // ---- W leg: push the mutated block back to the same offset --------------
+  ssize_t w = pwrite(st.fd, st.buf, IO_BUF_SIZE, offset);
+  if (w != (ssize_t)IO_BUF_SIZE) {
+    perror("pwrite (RW_balanced)");
+    abort();
+  }
+}
+
+// ----------------------------------------------------------------------------
+// do_io_write_work – issue one 4 KiB O_DIRECT write to a random aligned
+// offset.  Pure write leg with no preceding read.
+//
+// Backs the "rand_write" io_mode (legacy default).  Mutates one 8-byte word
+// per 512-byte sector before issuing pwrite to defeat block- and sub-block-
+// level deduplication, then writes at a random 4 KiB-aligned offset within
+// the pre-allocated file.  No fsync — matches the durability semantics of
+// the read variants so rand_write measures raw storage-layer IOPS, not the
+// durability pipeline.
+// ----------------------------------------------------------------------------
+void do_io_write_work(IoState &st, std::mt19937_64 &rng) {
+  if (st.fd < 0 || !st.buf)
+    return;
+
+  uint64_t *buf_ptr = static_cast<uint64_t *>(st.buf);
+  for (int i = 0; i < 8; ++i) {
+    buf_ptr[i * (512 / sizeof(uint64_t))] = rng();
+  }
+
   const off_t offset = (off_t)((rng() % st.num_blocks) * IO_BUF_SIZE);
   ssize_t ret = pwrite(st.fd, st.buf, IO_BUF_SIZE, offset);
   if (ret != (ssize_t)IO_BUF_SIZE) {
@@ -525,7 +576,12 @@ WorkloadResult run_workload(const WorkloadParams &params) {
       if (n < params.io_mix) {
         // I/O phase: keep issuing ops until the tick closes.
 #ifdef HAS_URING
-        if (io_state.use_uring) {
+        // RW_balanced is RMW (read → mutate buffer → write to the same offset).
+        // The mutate step lives in user space, so we cannot just link a read
+        // and write SQE at the kernel level.  Until we add per-slot phase
+        // tracking (issue read → on-CQE mutate buffer → issue write), fall
+        // back to the synchronous path for this mode.
+        if (io_state.use_uring && params.io_mode != "RW_balanced") {
           int in_flight = 0;
           int free_slots[1024];
           int free_count = io_state.queue_depth;
@@ -635,9 +691,12 @@ WorkloadResult run_workload(const WorkloadParams &params) {
               do_io_seq_read_work(io_state);
             } else if (params.io_mode == "rand_rw" || params.io_mode == "rand_read_write") {
               do_io_rw_work(io_state, rng);
-            } else {
-              // default: rand_write
+            } else if (params.io_mode == "RW_balanced") {
+              // RMW: 1 op = pread 4 KiB + mutate sector words + pwrite back.
               do_io_work(io_state, rng);
+            } else {
+              // default: rand_write (legacy pure-write path)
+              do_io_write_work(io_state, rng);
             }
             ++res.io_ops;
           }
