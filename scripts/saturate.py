@@ -109,6 +109,15 @@ def run_workers(
             sys.exit(1)
 
     print(f"{total:,.0f} ops/s")
+
+    # Cooldown sleep to let the OS writeback queues drain and disk controller stabilize
+    import time
+    try:
+        os.sync()
+    except AttributeError:
+        pass
+    time.sleep(2.0)
+
     return total
 
 
@@ -229,7 +238,7 @@ Mixed workload mode (realistic blend, e.g. before a probe sweep):
 
     # Common sweep params
     parser.add_argument("--duration",    type=int,   default=60,            metavar="S")
-    parser.add_argument("--warmup",      type=int,   default=5,             metavar="S")
+    parser.add_argument("--warmup",      type=int,   default=15,            metavar="S")
     parser.add_argument("--step",        type=int,   default=1,             metavar="N",
                         help="Concurrency step size (default: 1; try 4 for read-heavy IO modes).")
     parser.add_argument("--start-n",     type=int,   default=None,          metavar="N",

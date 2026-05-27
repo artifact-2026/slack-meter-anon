@@ -147,6 +147,15 @@ def run_probe(
     # Sort runs by bg_tput to pick the median run
     runs.sort(key=lambda x: x[0])
     median_run = runs[len(runs) // 2]
+
+    # Cooldown sleep to let the OS writeback queues drain and disk controller stabilize
+    import time
+    try:
+        os.sync()
+    except AttributeError:
+        pass
+    time.sleep(2.0)
+
     return median_run[0], median_run[1]
 
 
@@ -314,7 +323,7 @@ def main() -> None:
     parser.add_argument("--bg-mem-mix",   type=float, default=0.0,   metavar="F")
     parser.add_argument("--bg-intensity", type=float, default=0.75,  metavar="F")
     parser.add_argument("--duration",     type=int,   default=60,    metavar="S")
-    parser.add_argument("--warmup",       type=int,   default=5,     metavar="S",
+    parser.add_argument("--warmup",       type=int,   default=15,    metavar="S",
                         help="warmup duration (seconds)")
     parser.add_argument("--drop-pct",     type=float, default=0.05,  metavar="F")
     parser.add_argument("--interference-threshold-count", type=int, default=3, metavar="N",

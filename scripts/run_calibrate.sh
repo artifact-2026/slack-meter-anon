@@ -16,6 +16,7 @@
 #   BASE_SEED=<int>       seed for reproducibility (default: 42)
 #   MIN_PROCS=<int>       minimum processes in sweep (default: 4)
 #   MAX_PROCS=<int>       maximum processes in sweep (default: 32)
+#   MEM_MODE=<mode>       mem_copy | mem_read | mem_write (default: mem_copy)
 #
 # Usage (from repo root):
 #   RESOURCE_TYPE=ram bash scripts/run_calibrate.sh [extra args]

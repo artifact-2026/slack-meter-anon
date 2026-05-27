@@ -63,7 +63,7 @@ DEVICE="${DEVICE:-}"
 # Sweep / shared params defaults
 MODE="${MODE:-full}"
 DURATION="${DURATION:-45}"
-WARMUP="${WARMUP:-5}"
+WARMUP="${WARMUP:-15}"
 MAX_PROCS="${MAX_PROCS:-32}"
 MIN_PROCS="${MIN_PROCS:-4}"
 IO_MIX="${IO_MIX:-0.3}"
