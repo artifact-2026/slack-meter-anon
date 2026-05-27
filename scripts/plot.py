@@ -362,12 +362,14 @@ def plot_fungibility_matrix(df: pd.DataFrame, out_path: Path) -> None:
     """
     probe_modes = df["probe_mode"].unique().tolist()
     is_cpu = any("cpu" in str(m).lower() or m in ["cpu_int", "cpu_fp", "cpu_hash"] for m in df["bg_mode"].unique().tolist() + probe_modes)
-    title_prefix = "CPU " if is_cpu else "I/O "
+    title_prefix = "CPU " if is_cpu else ("Memory " if any("mem" in str(m).lower() for m in probe_modes) else "I/O ")
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(11, 6))
+
+    colors = ['#1565C0', '#E64A19', '#2E7D32', '#6A1B9A', '#c44e52', '#8172b3', '#937860', '#da8bc3']
 
     if "bg_intensity" in df.columns:
-        # Line plot for varying intensity
+        # Grouped bar chart for varying intensity
         intensities = sorted(df["bg_intensity"].unique().tolist())
         data = {pr: {} for pr in probe_modes}
         for _, row in df.iterrows():
@@ -376,18 +378,19 @@ def plot_fungibility_matrix(df: pd.DataFrame, out_path: Path) -> None:
             footprint = float(row["footprint_pct"])
             data[pr][intensity] = footprint
 
-        colors = ['#1565C0', '#E64A19', '#2E7D32', '#6A1B9A', '#c44e52', '#8172b3', '#937860', '#da8bc3']
-        markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p']
+        x = np.arange(len(intensities))
+        num_probes = len(probe_modes)
+        width = 0.7 / max(num_probes, 1)
 
         for i, probe_mode in enumerate(probe_modes):
-            y_vals = [data[probe_mode].get(intensity, np.nan) for intensity in intensities]
+            y_vals = [data[probe_mode].get(intensity, 0.0) for intensity in intensities]
+            offset = (i - (num_probes - 1) / 2.0) * width
             color = colors[i % len(colors)]
-            marker = markers[i % len(markers)]
-            ax.plot(intensities, y_vals, marker=marker, color=color, label=f"Probe: {probe_mode}",
-                    linewidth=2.5, markersize=8, alpha=0.88)
+            ax.bar(x + offset, y_vals, width, label=f"Probe: {probe_mode}", 
+                   color=color, edgecolor="white", alpha=0.88, zorder=3)
 
-        ax.set_xlabel("Background Workload Intensity", fontsize=11, fontweight="bold")
-        ax.xaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0))
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"BG Intensity:\n{int(intensity * 100)}%" for intensity in intensities], fontsize=10)
     else:
         # Grouped bar chart for varying background modes
         bg_modes = df["bg_mode"].unique().tolist()
@@ -401,8 +404,6 @@ def plot_fungibility_matrix(df: pd.DataFrame, out_path: Path) -> None:
         x = np.arange(len(bg_modes))
         num_probes = len(probe_modes)
         width = 0.7 / max(num_probes, 1)
-
-        colors = ['#1565C0', '#E64A19', '#2E7D32', '#6A1B9A', '#c44e52', '#8172b3', '#937860', '#da8bc3']
 
         for i, probe_mode in enumerate(probe_modes):
             y_vals = [data[bg_mode][probe_mode] for bg_mode in bg_modes]

@@ -89,26 +89,29 @@ def plot_matrix(csv_path, out_plot):
 
     sorted_intensities = sorted(list(intensities))
     
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(11, 6))
     
+    x = np.arange(len(sorted_intensities))
+    num_probes = len(PROBE_MODES)
+    width = 0.7 / max(num_probes, 1)
+
     colors = ['#1565C0', '#E64A19', '#2E7D32', '#6A1B9A']
-    markers = ['o', 's', '^', 'D']
     
     for i, probe_mode in enumerate(PROBE_MODES):
         if probe_mode not in data:
             continue
-        y_vals = [data[probe_mode].get(intensity, np.nan) for intensity in sorted_intensities]
-        ax.plot(sorted_intensities, y_vals, marker=markers[i % len(markers)], 
-                color=colors[i % len(colors)], label=f"Probe: {probe_mode}", 
-                linewidth=2.5, markersize=8)
+        y_vals = [data[probe_mode].get(intensity, 0.0) for intensity in sorted_intensities]
+        offset = (i - (num_probes - 1) / 2.0) * width
+        ax.bar(x + offset, y_vals, width, label=f"Probe: {probe_mode}", 
+               color=colors[i % len(colors)], edgecolor="white", alpha=0.88, zorder=3)
         
     ax.set_ylabel("Normalized App Footprint (%)\n(Capacity - Slack) / Capacity", fontsize=11, fontweight="bold")
-    ax.set_xlabel("Background CPU Workload Intensity", fontsize=11, fontweight="bold")
     ax.set_title("CPU Unit of Measure Fungibility:\nFootprint Measurement Invariance Across Different Probes and Intensities", 
                  fontsize=12, fontweight="bold", pad=15)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"BG Intensity:\n{int(intensity * 100)}%" for intensity in sorted_intensities], fontsize=10)
     
     import matplotlib.ticker as ticker
-    ax.xaxis.set_major_formatter(ticker.PercentFormatter(xmax=1.0))
     ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=100.0))
     
     ax.legend(title="Unit of Measure (Probe)", loc="upper left", bbox_to_anchor=(1, 1))
@@ -118,10 +121,8 @@ def plot_matrix(csv_path, out_plot):
     min_y = min(0.0, min_pct - 5.0)
     max_y = max(105.0, max_pct + 5.0)
     ax.set_ylim(min_y, max_y)
-    if sorted_intensities:
-        ax.set_xlim(min(sorted_intensities) - 0.05, max(sorted_intensities) + 0.05)
     
-    ax.grid(True, linestyle=':', alpha=0.7)
+    ax.grid(axis='y', linestyle=':', alpha=0.7, zorder=0)
     ax.spines[["top", "right"]].set_visible(False)
     
     fig.tight_layout()
