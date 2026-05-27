@@ -151,14 +151,21 @@ def saturate(
 
     history: list[tuple[int, float]] = []
     running_max = 0.0
+    peak_n = n                 # worker count at which running_max was last set
     steps_since_improvement = 0
 
     while True:
         tput = run_workers(n, **kw)
         history.append((n, tput))
 
-        if tput > running_max:
+        # Improvement threshold: 2% of the per-worker contribution at the current peak.
+        # Scales with concurrency — strict early (one worker matters a lot) and lenient
+        # late (marginal contribution of one more worker is small), so noise near a
+        # flat plateau doesn't keep resetting the counter indefinitely.
+        min_gain = (running_max / peak_n * 0.02) if running_max > 0 else 0.0
+        if tput > running_max + min_gain:
             running_max = tput
+            peak_n = n
             steps_since_improvement = 0
         else:
             steps_since_improvement += 1

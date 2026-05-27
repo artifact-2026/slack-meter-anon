@@ -207,9 +207,8 @@ def sweep(
     print(f"  {'-------':>7}  {'---------':>12}  {'---------':>12}")
 
     phase1: list[dict] = []
-    n_full = 0
-    interference_count = 0
-    first_interfered_n = None
+    consecutive_interference = 0
+    last_clean_n = 0            # last n_probe that did NOT cause interference
 
     for n_probe in range(1, max_probes + 1):
         bg_tput, probe_tput = run_probe(n_probe_full=n_probe, probe_frac=0.0, **kw)
@@ -219,19 +218,18 @@ def sweep(
         phase1.append(dict(n_probe=n_probe, bg_ktokens=bg_tput*_KT, probe_ktokens=probe_tput*_KT,
                            interfered=interfered))
         if interfered:
-            interference_count += 1
-            if first_interfered_n is None:
-                first_interfered_n = n_probe
-            if interference_count >= interference_threshold_count:
+            consecutive_interference += 1
+            if consecutive_interference >= interference_threshold_count:
                 break
-        n_full = n_probe
+        else:
+            last_clean_n = n_probe
+            consecutive_interference = 0
     else:
         print(f"\n  Reached max_probes={max_probes} without reaching interference threshold.")
 
-    if first_interfered_n is not None:
-        n_full = first_interfered_n - 1
-    else:
-        n_full = max_probes
+    # n_full = last probe count that left background throughput undisturbed.
+    # 0 means even a single probe worker at full intensity causes interference.
+    n_full = last_clean_n
 
     # ------------------------------------------------------------------
     # Phase 2: binary search on fractional last worker
