@@ -30,19 +30,11 @@
 #
 #   Sweep — probe (probe.py)
 #   ----------------------------
-#   DURATION=<secs>      seconds per I/O probe                      (default: 30)
+#   DURATION=<secs>      seconds per probe                          (default: 30)
 #   SAMPLES=<n>          number of samples per probe level          (default: 3)
-#
-#   Sweep — slack (orchestrate.py)
-#   ------------------------------
-#   MODE=<mode>          saturation | slack-cpu | slack-io | full   (default: full)
-#   DURATION=<secs>      seconds per worker probe                   (default: 30)
-#   MAX_PROCS=<n>        max processes in saturation sweep          (default: 32)
-#   MIN_PROCS=<n>        min processes before saturation early-stop (default: 4)
+#   DROP_PCT=<float>     throughput-drop fraction for interference  (default: 0.10)
 #   IO_MIX=<float>       sweep baseline io_mix                      (default: 0.3)
 #   INTENSITY=<float>    sweep baseline intensity                   (default: 0.75)
-#   DROP_PCT=<float>     throughput-drop fraction for interference  (default: 0.05)
-#   SAT_EPSILON=<float>  min improvement ratio to keep sweeping     (default: 1.025)
 #   BG_IO_MODE=<mode>    values: rand_write | rand_read | rand_read_64k | seq_read  (default: rand_write)
 #   PROBE_IO_MODE=<mode> values: rand_write | rand_read | rand_read_64k | seq_read (default: rand_write)
 #   QUEUE_DEPTH=<int>    default queue depth/concurrency per worker for io_uring (default: 1)

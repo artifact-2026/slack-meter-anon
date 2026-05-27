@@ -32,6 +32,16 @@ from typing import Optional
 REPO_ROOT  = Path(__file__).parent.parent.resolve()
 WORKER_BIN = str(REPO_ROOT / "build" / "worker")
 
+
+def _plot_slack_result(result: dict, out_path: Path) -> None:
+    """Delegate to plot.py — keeps probe.py free of matplotlib."""
+    try:
+        from plot import plot_slack_result
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from plot import plot_slack_result  # type: ignore[no-redef]
+    plot_slack_result(result, out_path)
+
 _BG_SEED_BASE = 1000
 _PROBE_SEED_BASE = 2000
 
@@ -280,128 +290,6 @@ def sweep(
 
 
 # ---------------------------------------------------------------------------
-# Plot
-# ---------------------------------------------------------------------------
-
-def plot_slack_result(result: dict, out_path: Path) -> None:
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("[probe] matplotlib not installed — skipping plot", file=sys.stderr)
-        return
-
-    ptype        = result["probe_type"].upper()
-    baseline_kt  = result["baseline_bg_ktokens"]
-    threshold_kt = result["interference_threshold"] * _KT
-    slack_kt     = result["slack_ktokens"]
-    n_full       = result["slack_full"]
-    partial      = result["slack_partial"]
-    p1           = result["phase1_probes"]
-    p2           = result["phase2_probes"]
-
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    fig.suptitle(f"{ptype} Sweep Under Background Load — Slack Result",
-                 fontsize=12, fontweight="bold")
-
-    # ---- Panel 1: Phase 1 linear sweep ------------------------------------
-    ax = axes[0]
-    if p1:
-        x  = [0]          + [d["n_probe"]       for d in p1]
-        bg = [baseline_kt] + [d["bg_ktokens"]    for d in p1]
-        pb = [0.0]         + [d["probe_ktokens"] for d in p1]
-
-        ax.plot(x, bg, "o-", color="#4c72b0", label="bg throughput",  linewidth=2, markersize=5)
-        ax.plot(x, pb, "s-", color="#dd8452", label=f"{ptype.lower()} throughput",  linewidth=2, markersize=5)
-        ax.axhline(baseline_kt,  color="#2ca02c", linestyle="--", linewidth=1.4,
-                   label=f"baseline ({baseline_kt:.2f} kT/s)")
-        ax.axhline(threshold_kt, color="#c44e52", linestyle=":",  linewidth=1.4,
-                   label=f"threshold ({threshold_kt:.2f} kT/s, −{result['drop_pct']*100:.0f}%)")
-
-        interf = [d for d in p1 if d["interfered"]]
-        if interf:
-            xi = interf[0]["n_probe"]
-            ax.axvline(xi, color="#c44e52", linestyle="--", alpha=0.4)
-            ax.annotate(f"interference\nat {xi} probe(s)",
-                        xy=(xi, threshold_kt), xytext=(xi + 0.3, threshold_kt * 1.08),
-                        fontsize=8, color="#c44e52",
-                        arrowprops=dict(arrowstyle="->", color="#c44e52", lw=1))
-
-        ax.set_xlabel(f"Number of {ptype} sweep workers")
-        ax.set_ylabel("Throughput (kTokens/s)")
-        ax.set_title("Phase 1 — Linear sweep", fontsize=10, loc="left")
-        ax.legend(fontsize=8)
-        ax.set_xlim(left=0)
-        ax.set_ylim(bottom=0)
-
-    # ---- Panel 2: Phase 2 binary search -----------------------------------
-    ax = axes[1]
-    if p2:
-        x2  = [d["intensity"]   for d in p2]
-        bg2 = [d["bg_ktokens"]  for d in p2]
-        pb2 = [d["probe_ktokens"]  for d in p2]
-        ok  = [not d["interfered"] for d in p2]
-
-        for xi, bgi, pbi, is_ok in zip(x2, bg2, pb2, ok):
-            c = "#4c72b0" if is_ok else "#c44e52"
-            ax.scatter(xi, bgi, color=c, zorder=5, s=60)
-            ax.scatter(xi, pbi, color="#dd8452", marker="s", zorder=5, s=60)
-
-        ax.plot(x2, bg2, "-",  color="#4c72b0", alpha=0.4, linewidth=1)
-        ax.plot(x2, pb2, "-",  color="#dd8452", alpha=0.4, linewidth=1)
-
-        ax.axhline(baseline_kt,  color="#2ca02c", linestyle="--", linewidth=1.4,
-                   label=f"baseline ({baseline_kt:.2f} kT/s)")
-        ax.axhline(threshold_kt, color="#c44e52", linestyle=":",  linewidth=1.4,
-                   label=f"threshold ({threshold_kt:.2f} kT/s)")
-
-        if partial > 0:
-            ax.axvline(partial, color="#9467bd", linestyle="--", linewidth=1.4,
-                       label=f"best intensity = {partial:.3f}")
-            ax.annotate(f"{ptype.lower()} slack\n{slack_kt:.3f} kT/s",
-                        xy=(partial, slack_kt),
-                        xytext=(partial + 0.05, slack_kt * 1.1),
-                        fontsize=8, color="#9467bd",
-                        arrowprops=dict(arrowstyle="->", color="#9467bd", lw=1))
-
-        from matplotlib.lines import Line2D
-        handles, labels = ax.get_legend_handles_labels()
-        handles += [
-            Line2D([0], [0], marker="o", color="w", markerfacecolor="#4c72b0", markersize=8, label="bg (ok)"),
-            Line2D([0], [0], marker="o", color="w", markerfacecolor="#c44e52", markersize=8, label="bg (interferes)"),
-            Line2D([0], [0], marker="s", color="w", markerfacecolor="#dd8452", markersize=8, label=f"{ptype.lower()} throughput"),
-        ]
-        ax.legend(handles=handles, fontsize=8)
-
-        ax.set_xlabel(f"Partial intensity of last probe\n({n_full} full probe(s) locked at 1.0)")
-        ax.set_ylabel("Throughput (kTokens/s)")
-        ax.set_title("Phase 2 — Binary search", fontsize=10, loc="left")
-        ax.set_xlim(0, 1)
-        ax.set_ylim(bottom=0)
-
-    # ---- Summary text box -------------------------------------------------
-    summary = (
-        f"Background load:  {result['bg_procs']} workers  "
-        f"io_mix={result['bg_io_mix']} mem_mix={result['bg_mem_mix']} intensity={result['bg_intensity']}\n"
-        f"Baseline bg:      {baseline_kt:.3f} kTokens/s\n"
-        f"{ptype} slack:        {n_full} full probe(s) + 1 × {partial:.3f}  "
-        f"→  {slack_kt:.3f} kTokens/s of additional {ptype}"
-    )
-    fig.text(0.5, 0.01, summary, ha="center", va="bottom", fontsize=8.5,
-             bbox=dict(boxstyle="round,pad=0.4", facecolor="#f0f0f0", alpha=0.8))
-
-    for ax in axes:
-        ax.grid(axis="y", linestyle=":", linewidth=0.6, alpha=0.7)
-        ax.spines[["top", "right"]].set_visible(False)
-
-    fig.tight_layout(rect=[0, 0.10, 1, 0.95])
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    print(f"[probe] Plot saved: {out_path}")
-    plt.close(fig)
-
-
-# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -498,7 +386,7 @@ def main() -> None:
         print(f"\nResult written to {args.output}")
 
     if args.plot:
-        plot_slack_result(result, Path(args.plot))
+        _plot_slack_result(result, Path(args.plot))
 
 
 if __name__ == "__main__":

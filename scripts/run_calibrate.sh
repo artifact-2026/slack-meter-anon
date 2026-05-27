@@ -67,9 +67,9 @@ if [[ -n "${START_N:-}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-log "Running ${RESOURCE_TYPE} calibration sweep (mode: ${IO_MODE}, step: ${STEP}${START_N:+, start-n: ${START_N}}, qd: ${QUEUE_DEPTH})..."
+log "Running ${RESOURCE_TYPE} saturation sweep (mode: ${IO_MODE}, step: ${STEP}${START_N:+, start-n: ${START_N}}, qd: ${QUEUE_DEPTH})..."
 # shellcheck disable=SC2086
-python3 "$REPO/scripts/calibrate.py" \
+python3 "$REPO/scripts/saturate.py" \
     --resource-type "$RESOURCE_TYPE" \
     --io-mode "$IO_MODE" \
     --cpu-mode "$CPU_MODE" \
