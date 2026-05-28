@@ -40,6 +40,8 @@
 #   QUEUE_DEPTH=<int>    default queue depth/concurrency per worker for io_uring (default: 1)
 #   BG_QUEUE_DEPTH=<int>    queue depth for background workers (default: QUEUE_DEPTH)
 #   PROBE_QUEUE_DEPTH=<int> queue depth for probe workers (default: QUEUE_DEPTH)
+#   BASELINE_SAMPLES=<n> number of baseline samples (median, default: 1)
+#   THRESHOLD_SIGMA=<K>  if >0, interference also requires bg < median - K*std (default: 0)
 #
 #   Collectors / output
 #   --------------------
@@ -80,6 +82,8 @@ MEM_MODE="${MEM_MODE:-mem_copy}"
 BG_MEM_MODE="${BG_MEM_MODE:-$MEM_MODE}"
 PROBE_MEM_MODE="${PROBE_MEM_MODE:-$MEM_MODE}"
 SAT_EPSILON="${SAT_EPSILON:-1.025}"
+BASELINE_SAMPLES="${BASELINE_SAMPLES:-1}"
+THRESHOLD_SIGMA="${THRESHOLD_SIGMA:-0}"
 if [[ -z "${TMP_DIR:-}" ]]; then
     if [[ -d "/holly" && -w "/holly" ]]; then
         TMP_DIR="/holly/slack-meter-loaded-sweep"
@@ -307,6 +311,8 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
         --bg-queue-depth    "$BG_QUEUE_DEPTH"    \
         --probe-queue-depth "$PROBE_QUEUE_DEPTH" \
         --file-size-mib     "$FILE_SIZE_MIB"     \
+        --baseline-samples  "$BASELINE_SAMPLES"  \
+        --threshold-sigma   "$THRESHOLD_SIGMA"   \
         --output       "$OUTPUT_DIR/sweep_${SWEEP}.json" \
         --plot         "$OUTPUT_DIR/slack_result_${SWEEP}.png"
 else
