@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import statistics
 import subprocess
 import sys
 from pathlib import Path
@@ -187,6 +188,8 @@ def sweep(
     bg_mem_mode:  str = "mem_copy",
     probe_mem_mode: str = "mem_copy",
     file_size_bytes: int = 0,
+    baseline_samples: int = 1,
+    threshold_sigma: float = 0.0,
 ) -> dict:
     os.makedirs(tmp_dir, exist_ok=True)
     
@@ -214,13 +217,44 @@ def sweep(
               file_size_bytes=file_size_bytes)
 
     # ------------------------------------------------------------------
-    # Phase 0: baseline
+    # Phase 0: baseline (optionally multi-sample, optionally noise-aware
+    # threshold)
     # ------------------------------------------------------------------
     print("--- Phase 0: Baseline (background workers only) ---")
-    baseline_tput, _ = run_probe(n_probe_full=0, probe_frac=0.0, **kw)
-    threshold = baseline_tput * (1.0 - drop_pct)
-    print(f"  Baseline bg : {baseline_tput*_KT:,.3f} kTokens/s")
-    print(f"  Threshold   : {threshold*_KT:,.3f} kTokens/s  (drop >= {drop_pct*100:.1f}%)")
+
+    baseline_runs: list[float] = []
+    n_baseline = max(1, baseline_samples)
+    for i in range(n_baseline):
+        bt, _ = run_probe(n_probe_full=0, probe_frac=0.0, **kw)
+        baseline_runs.append(bt)
+        if n_baseline > 1:
+            print(f"  baseline sample {i+1}/{n_baseline}: {bt*_KT:,.3f} kTokens/s")
+
+    baseline_tput = statistics.median(baseline_runs)
+    baseline_std  = statistics.stdev(baseline_runs) if len(baseline_runs) > 1 else 0.0
+
+    # Threshold combines two safety margins; the lower (more permissive)
+    # one wins so a quiet machine still gets the drop_pct floor and a noisy
+    # machine is forgiven by the σ band.
+    drop_threshold  = baseline_tput * (1.0 - drop_pct)
+    sigma_threshold = baseline_tput - threshold_sigma * baseline_std
+    if threshold_sigma > 0.0 and baseline_std > 0.0:
+        threshold = min(drop_threshold, sigma_threshold)
+    else:
+        threshold = drop_threshold
+
+    if n_baseline > 1:
+        print(f"  Baseline bg : {baseline_tput*_KT:,.3f} kTokens/s "
+              f"(median of {n_baseline}; σ={baseline_std*_KT:,.3f})")
+    else:
+        print(f"  Baseline bg : {baseline_tput*_KT:,.3f} kTokens/s")
+    if threshold_sigma > 0.0 and baseline_std > 0.0:
+        print(f"  Threshold   : {threshold*_KT:,.3f} kTokens/s  "
+              f"(min of drop>={drop_pct*100:.1f}%={drop_threshold*_KT:,.3f}, "
+              f"-{threshold_sigma:g}σ={sigma_threshold*_KT:,.3f})")
+    else:
+        print(f"  Threshold   : {threshold*_KT:,.3f} kTokens/s  "
+              f"(drop >= {drop_pct*100:.1f}%)")
 
     # ------------------------------------------------------------------
     # Phase 1: linear sweep
@@ -232,6 +266,10 @@ def sweep(
     phase1: list[dict] = []
     consecutive_interference = 0
     last_clean_n = 0            # last n_probe that did NOT cause interference
+    last_clean_probe_ktokens = 0.0  # probe throughput at last_clean_n; used as
+                                    # the Phase-2 fallback so that a fully-
+                                    # interfering Phase 2 still reports the
+                                    # Phase-1 clean throughput (instead of 0).
 
     for n_probe in range(1, max_probes + 1):
         bg_tput, probe_tput = run_probe(n_probe_full=n_probe, probe_frac=0.0, **kw)
@@ -246,6 +284,7 @@ def sweep(
                 break
         else:
             last_clean_n = n_probe
+            last_clean_probe_ktokens = probe_tput * _KT
             consecutive_interference = 0
     else:
         print(f"\n  Reached max_probes={max_probes} without reaching interference threshold.")
@@ -263,7 +302,10 @@ def sweep(
 
     low, high = 0.0, 1.0
     best_intensity  = 0.0
-    best_probe_ktokens = 0.0
+    # Seed with the Phase-1 last-clean reading.  If every Phase-2 step
+    # interferes, slack still reports the n_full × intensity=1.0 throughput
+    # (e.g., 7 workers at 20.5 kT/s) rather than collapsing to 0.
+    best_probe_ktokens = last_clean_probe_ktokens
     phase2: list[dict] = []
 
     for step in range(1, binary_steps + 1):
@@ -296,8 +338,12 @@ def sweep(
         slack_ktokens         = slack_ktokens,
         # raw
         baseline_tput         = baseline_tput,
+        baseline_std          = baseline_std,
+        baseline_samples      = n_baseline,
+        baseline_runs         = baseline_runs,
         interference_threshold= threshold,
         drop_pct              = drop_pct,
+        threshold_sigma       = threshold_sigma,
         bg_procs              = bg_procs,
         bg_io_mix             = bg_io_mix,
         bg_mem_mix            = bg_mem_mix,
@@ -330,6 +376,11 @@ def main() -> None:
                         help="number of interference events required to terminate Phase 1 (default: 3)")
     parser.add_argument("--samples",      type=int,   default=3,     metavar="N",
                         help="number of samples per probe level (default: 3)")
+    parser.add_argument("--baseline-samples", type=int, default=1,    metavar="N",
+                        help="number of baseline samples; uses the median (default: 1)")
+    parser.add_argument("--threshold-sigma",  type=float, default=0.0, metavar="K",
+                        help="if >0, also require bg < baseline_median - K*baseline_std "
+                             "for interference (combined with drop_pct via min(); default: 0 = off)")
     parser.add_argument("--max-probes",   type=int,   default=64,    metavar="N")
     parser.add_argument("--tmp-dir",      default="/tmp/slack-meter", metavar="DIR")
     parser.add_argument("--worker-bin",   default=WORKER_BIN,        metavar="PATH")
@@ -396,6 +447,8 @@ def main() -> None:
         bg_mem_mode  = bg_mem,
         probe_mem_mode = probe_mem,
         file_size_bytes = args.file_size_mib * 1024 * 1024,
+        baseline_samples = args.baseline_samples,
+        threshold_sigma  = args.threshold_sigma,
     )
 
     print("\n" + "=" * 60)
