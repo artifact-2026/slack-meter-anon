@@ -2,10 +2,11 @@
 """
 test_fungibility_matrix.py
 ==========================
-Runs a 3x4 matrix experiment to prove the fungibility of the "unit of measure".
-It tests combinations of Background IO_MODE and Probe IO_MODE, proving that 
-the Normalized App Footprint calculation ((Capacity - Slack) / Capacity) yields 
-a stable measurement of the application's size regardless of the probe used.
+Runs a matrix experiment to prove the fungibility of the I/O "unit of measure".
+It tests combinations of Background I/O workload intensity and Probe I/O Mode under a mixed 
+I/O background workload (rw_mixed), proving that the Normalized App Footprint calculation 
+((Capacity - Slack) / Capacity) yields a stable measurement of the application's size 
+regardless of the probe used.
 """
 
 import argparse
@@ -17,11 +18,8 @@ import sys
 from pathlib import Path
 from getpass import getuser
 
-# The 3 background modes requested (write only, read only, read and write mixed)
-BG_MODES = ["rand_write", "rand_read", "rand_rw"]
-
-# The 4 valid probe modes supported by the C++ worker
-PROBE_MODES = ["rand_write", "rand_read", "rand_read_64k", "seq_read"]
+# The 3 probe modes
+PROBE_MODES = ["RW_balanced", "R_heavy", "W_heavy"]
 
 def load_capacities(modes, capacity_file=None, capacities_arg=None, out_dir=None):
     caps = {}
@@ -72,37 +70,60 @@ def plot_matrix(csv_path, out_plot):
         print("\n[Warning] matplotlib not installed. Data saved to CSV, but skipping plot.")
         return
 
-    # Parse CSV: bg_mode -> {probe_mode: footprint}
-    data = {bg: {pr: 0.0 for pr in PROBE_MODES} for bg in BG_MODES}
+    # Parse CSV: probe_mode -> {bg_intensity: footprint}
+    data = {}
+    intensities = set()
+    footprints = []
     
     with open(csv_path, "r") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            bg = row["bg_mode"]
             pr = row["probe_mode"]
-            if bg in data and pr in data[bg]:
-                data[bg][pr] = float(row["footprint_pct"])
+            intensity = float(row["bg_intensity"])
+            footprint = float(row["footprint_pct"])
+            intensities.add(intensity)
+            footprints.append(footprint)
+            if pr not in data:
+                data[pr] = {}
+            data[pr][intensity] = footprint
 
+    sorted_intensities = sorted(list(intensities))
+    
     fig, ax = plt.subplots(figsize=(11, 6))
     
-    x = np.arange(len(BG_MODES))
-    width = 0.15
-    colors = ['#4c72b0', '#dd8452', '#55a868', '#c44e52']
+    x = np.arange(len(sorted_intensities))
+    num_probes = len(PROBE_MODES)
+    width = 0.7 / max(num_probes, 1)
+
+    colors = ['#1565C0', '#E64A19', '#2E7D32', '#6A1B9A']
     
     for i, probe_mode in enumerate(PROBE_MODES):
-        y_vals = [data[bg_mode][probe_mode] for bg_mode in BG_MODES]
-        offset = (i - 1.5) * width
+        if probe_mode not in data:
+            continue
+        y_vals = [data[probe_mode].get(intensity, 0.0) for intensity in sorted_intensities]
+        offset = (i - (num_probes - 1) / 2.0) * width
         ax.bar(x + offset, y_vals, width, label=f"Probe: {probe_mode}", 
-               color=colors[i], edgecolor="white", zorder=3)
+               color=colors[i % len(colors)], edgecolor="white", alpha=0.88, zorder=3)
         
     ax.set_ylabel("Normalized App Footprint (%)\n(Capacity - Slack) / Capacity", fontsize=11, fontweight="bold")
-    ax.set_title("Unit of Measure Fungibility:\nFootprint Measurement Invariance Across Different Probes", 
-                 fontsize=13, fontweight="bold")
+    ax.set_title("I/O Unit of Measure Fungibility:\nFootprint Measurement Invariance Across Different Probes and Intensities", 
+                 fontsize=12, fontweight="bold", pad=15)
     ax.set_xticks(x)
-    ax.set_xticklabels([f"BG Workload:\n{m}" for m in BG_MODES], fontsize=10)
+    ax.set_xticklabels([f"BG Intensity:\n{int(intensity * 100)}%" for intensity in sorted_intensities], fontsize=10)
+    
+    import matplotlib.ticker as ticker
+    ax.yaxis.set_major_formatter(ticker.PercentFormatter(xmax=100.0))
+    
     ax.legend(title="Unit of Measure (Probe)", loc="upper left", bbox_to_anchor=(1, 1))
-    ax.set_ylim(0, 105)
+    
+    min_pct = min(footprints) if footprints else 0.0
+    max_pct = max(footprints) if footprints else 100.0
+    min_y = min(0.0, min_pct - 5.0)
+    max_y = max(105.0, max_pct + 5.0)
+    ax.set_ylim(min_y, max_y)
+    
     ax.grid(axis='y', linestyle=':', alpha=0.7, zorder=0)
+    ax.spines[["top", "right"]].set_visible(False)
     
     fig.tight_layout()
     fig.savefig(out_plot, dpi=150)
@@ -124,15 +145,16 @@ def clean_scratch_files():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Test 3x4 Fungibility Matrix.")
+    parser = argparse.ArgumentParser(description="Test I/O Fungibility Matrix with mixed background at varying intensities.")
     parser.add_argument("--bg-procs", type=int, default=8)
     parser.add_argument("--bg-io-mix", type=float, default=0.3)
     parser.add_argument("--bg-mem-mix", type=float, default=0.3)
-    parser.add_argument("--bg-intensity", type=float, default=0.75)
+    parser.add_argument("--bg-intensities", type=str, default="0.2,0.4,0.6,0.8",
+                        help="comma-separated list of background I/O intensities to sweep (default: 0.2,0.4,0.6,0.8)")
     parser.add_argument("--duration", type=int, default=60)
     parser.add_argument("--out-dir", type=str, default="results/fungibility_matrix")
     parser.add_argument("--capacities", type=str, default=None,
-                        help="JSON string or comma-separated key-value list of capacities, e.g., 'rand_read:180,rand_write:25'")
+                        help="JSON string or comma-separated key-value list of capacities, e.g., 'RW_balanced:100,R_heavy:50,W_heavy:30'")
     parser.add_argument("--capacity-file", type=str, default=None,
                         help="JSON file containing the capacity mapping")
     parser.add_argument("--queue-depth", type=int, default=1,
@@ -170,29 +192,32 @@ def main():
             print(f"  {p}")
         sys.exit(1)
 
+    # Parse intensities to sweep
+    intensities = [float(x.strip()) for x in args.bg_intensities.split(",") if x.strip()]
+
     # Load capacities (either from CLI, file, or preexisting calibration artifacts)
     if not args.only_plot:
         capacities = load_capacities(PROBE_MODES, args.capacity_file, args.capacities, out_dir)
 
         print("\n" + "="*60)
-        print(" Phase 2: Probe Slack for 3x4 Matrix")
+        print(" Phase 2: Probe Slack for I/O Fungibility Matrix")
         print("="*60)
         
         # Initialize CSV
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["bg_mode", "probe_mode", "capacity_kt", "slack_kt", "app_usage_kt", "footprint_pct"])
+            writer.writerow(["bg_mode", "probe_mode", "bg_intensity", "capacity_kt", "slack_kt", "app_usage_kt", "footprint_pct"])
 
-        # Nested loop for the 12 combinations
-        for bg_mode in BG_MODES:
+        # Loop over intensities
+        for intensity in intensities:
             print("\n" + "-"*50)
-            print(f" Evaluating Background Workload: {bg_mode.upper()}")
+            print(f" Evaluating Background Workload (rw_mixed) at Intensity: {intensity:.2f}")
             print("-" * 50)
             
             for probe_mode in PROBE_MODES:
                 print(f"\n  ---> Probing with {probe_mode} ...")
                 
-                sweep_dir = out_dir / f"bg_{bg_mode}" / f"probe_{probe_mode}"
+                sweep_dir = out_dir / f"bg_intensity_{intensity:.2f}" / f"probe_{probe_mode}"
                 sweep_dir.mkdir(parents=True, exist_ok=True)
                 
                 env = os.environ.copy()
@@ -200,20 +225,17 @@ def main():
                 env["BG_PROCS"] = str(args.bg_procs)
                 env["BG_IO_MIX"] = str(args.bg_io_mix)
                 env["BG_MEM_MIX"] = str(args.bg_mem_mix)
-                env["BG_INTENSITY"] = str(args.bg_intensity)
-                env["BG_IO_MODE"] = bg_mode
+                env["BG_INTENSITY"] = str(intensity)
+                env["BG_IO_MODE"] = "rw_mixed"
                 env["PROBE_IO_MODE"] = probe_mode
                 env["DURATION"] = str(args.duration)
                 env["OUTPUT_DIR"] = str(sweep_dir)
                 env["DISABLE_COLLECTORS"] = "1"
                 
-                # Forward the queue depth, drop threshold, and early stop count
+                # Forward configurations
                 env["QUEUE_DEPTH"] = str(args.queue_depth)
                 env["BG_QUEUE_DEPTH"] = str(args.bg_queue_depth if args.bg_queue_depth is not None else args.queue_depth)
-                if probe_mode == "rand_read":
-                    env["PROBE_QUEUE_DEPTH"] = "32"
-                else:
-                    env["PROBE_QUEUE_DEPTH"] = str(args.probe_queue_depth if args.probe_queue_depth is not None else args.queue_depth)
+                env["PROBE_QUEUE_DEPTH"] = str(args.probe_queue_depth if args.probe_queue_depth is not None else args.queue_depth)
                 env["DROP_PCT"] = str(args.drop_pct)
                 env["INTERFERENCE_COUNT"] = str(args.interference_count)
                 
@@ -260,7 +282,7 @@ def main():
                 
                 with open(csv_path, "a", newline="") as f:
                     writer = csv.writer(f)
-                    writer.writerow([bg_mode, probe_mode, cap, slack, app_usage, footprint_pct])
+                    writer.writerow(["rw_mixed", probe_mode, intensity, cap, slack, app_usage, footprint_pct])
 
     print("\n" + "="*60)
     print(" Phase 3: Generate Plot")
