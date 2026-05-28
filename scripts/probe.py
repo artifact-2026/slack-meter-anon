@@ -145,9 +145,9 @@ def run_probe(
                 pass
         runs.append((bg_tput, probe_tput))
 
-    # Sort runs by bg_tput to pick the median run
-    runs.sort(key=lambda x: x[0])
-    median_run = runs[len(runs) // 2]
+    # Average across all samples
+    avg_bg    = sum(r[0] for r in runs) / len(runs)
+    avg_probe = sum(r[1] for r in runs) / len(runs)
 
     # Cooldown sleep to let the OS writeback queues drain and disk controller stabilize
     import time
@@ -157,7 +157,7 @@ def run_probe(
         pass
     time.sleep(2.0)
 
-    return median_run[0], median_run[1]
+    return avg_bg, avg_probe
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +189,6 @@ def sweep(
     probe_mem_mode: str = "mem_copy",
     file_size_bytes: int = 0,
     baseline_samples: int = 1,
-    threshold_sigma: float = 0.0,
 ) -> dict:
     os.makedirs(tmp_dir, exist_ok=True)
     
@@ -217,8 +216,7 @@ def sweep(
               file_size_bytes=file_size_bytes)
 
     # ------------------------------------------------------------------
-    # Phase 0: baseline (optionally multi-sample, optionally noise-aware
-    # threshold)
+    # Phase 0: baseline (optionally multi-sample)
     # ------------------------------------------------------------------
     print("--- Phase 0: Baseline (background workers only) ---")
 
@@ -230,99 +228,118 @@ def sweep(
         if n_baseline > 1:
             print(f"  baseline sample {i+1}/{n_baseline}: {bt*_KT:,.3f} kTokens/s")
 
-    baseline_tput = statistics.median(baseline_runs)
-    baseline_std  = statistics.stdev(baseline_runs) if len(baseline_runs) > 1 else 0.0
-
-    # Threshold combines two safety margins; the lower (more permissive)
-    # one wins so a quiet machine still gets the drop_pct floor and a noisy
-    # machine is forgiven by the σ band.
-    drop_threshold  = baseline_tput * (1.0 - drop_pct)
-    sigma_threshold = baseline_tput - threshold_sigma * baseline_std
-    if threshold_sigma > 0.0 and baseline_std > 0.0:
-        threshold = min(drop_threshold, sigma_threshold)
-    else:
-        threshold = drop_threshold
+    baseline_tput = statistics.mean(baseline_runs)
+    threshold     = baseline_tput * (1.0 - drop_pct)
 
     if n_baseline > 1:
-        print(f"  Baseline bg : {baseline_tput*_KT:,.3f} kTokens/s "
-              f"(median of {n_baseline}; σ={baseline_std*_KT:,.3f})")
+        print(f"  Baseline bg : {baseline_tput*_KT:,.3f} kTokens/s (mean of {n_baseline})")
     else:
         print(f"  Baseline bg : {baseline_tput*_KT:,.3f} kTokens/s")
-    if threshold_sigma > 0.0 and baseline_std > 0.0:
-        print(f"  Threshold   : {threshold*_KT:,.3f} kTokens/s  "
-              f"(min of drop>={drop_pct*100:.1f}%={drop_threshold*_KT:,.3f}, "
-              f"-{threshold_sigma:g}σ={sigma_threshold*_KT:,.3f})")
-    else:
-        print(f"  Threshold   : {threshold*_KT:,.3f} kTokens/s  "
-              f"(drop >= {drop_pct*100:.1f}%)")
+    print(f"  Threshold   : {threshold*_KT:,.3f} kTokens/s  (drop >= {drop_pct*100:.1f}%)")
 
     # ------------------------------------------------------------------
-    # Phase 1: linear sweep
+    # Phase 1: linear sweep + inline Phase 2 with optional resume
+    #
+    # Phase 2 is triggered whenever interference_threshold_count consecutive
+    # interference readings are seen.  If Phase 2 finds *no* interference at
+    # any step (binary search converges all the way up), the probe count that
+    # triggered Phase 2 is considered verified-clean and Phase 1 resumes from
+    # the next probe.  Otherwise Phase 2 terminates the sweep.
+    #
+    # Phase 2 also runs once at the end if Phase 1 exhausts max_probes without
+    # triggering interference_threshold_count consecutive bad readings.
     # ------------------------------------------------------------------
+
+    def _run_phase2(n_full_: int, seed_ktokens: float) -> tuple[list[dict], float, float]:
+        """Binary-search for the highest fractional probe intensity that leaves
+        background throughput undisturbed.  Returns (steps, best_intensity,
+        best_probe_ktokens)."""
+        print(f"\n--- Phase 2: Binary search  (locked: {n_full_} × intensity=1.0) ---")
+        print(f"  {'step':>4}  {'intensity':>9}  {'bg (kT/s)':>12}  {probe_type.upper()+' (kT/s)':>12}  {'status':}")
+        print(f"  {'----':>4}  {'---------':>9}  {'---------':>12}  {'---------':>12}")
+        low_, high_ = 0.0, 1.0
+        best_int_   = 0.0
+        best_tput_  = seed_ktokens   # fallback: Phase-1 clean reading
+        steps_: list[dict] = []
+        for step in range(1, binary_steps + 1):
+            mid = (low_ + high_) / 2.0
+            bg2, p2 = run_probe(n_probe_full=n_full_, probe_frac=mid, **kw)
+            int2 = bg2 < threshold
+            s2   = "interferes" if int2 else "ok"
+            print(f"  {step:>4d}  {mid:>9.3f}  {bg2*_KT:>12.3f}  {p2*_KT:>12.3f}  {s2}")
+            steps_.append(dict(step=step, intensity=mid,
+                               bg_ktokens=bg2*_KT, probe_ktokens=p2*_KT,
+                               interfered=int2))
+            if not int2:
+                best_int_  = mid
+                best_tput_ = p2 * _KT
+                low_  = mid
+            else:
+                high_ = mid
+        return steps_, best_int_, best_tput_
+
     print(f"\n--- Phase 1: Linear {probe_type.upper()} sweep ---")
     print(f"  {'Probes':>7}  {'bg (kT/s)':>12}  {probe_type.upper()+' (kT/s)':>12}  {'status':}")
     print(f"  {'-------':>7}  {'---------':>12}  {'---------':>12}")
 
     phase1: list[dict] = []
+    phase2: list[dict] = []
     consecutive_interference = 0
-    last_clean_n = 0            # last n_probe that did NOT cause interference
-    last_clean_probe_ktokens = 0.0  # probe throughput at last_clean_n; used as
-                                    # the Phase-2 fallback so that a fully-
-                                    # interfering Phase 2 still reports the
-                                    # Phase-1 clean throughput (instead of 0).
+    last_clean_n             = 0
+    last_clean_probe_ktokens = 0.0
+    best_intensity           = 0.0
+    best_probe_ktokens       = 0.0
+    n_full                   = 0
 
-    for n_probe in range(1, max_probes + 1):
+    n_probe = 1
+    while n_probe <= max_probes:
         bg_tput, probe_tput = run_probe(n_probe_full=n_probe, probe_frac=0.0, **kw)
         interfered = bg_tput < threshold
         status = "INTERFERENCE" if interfered else "ok"
         print(f"  {n_probe:>7d}  {bg_tput*_KT:>12.3f}  {probe_tput*_KT:>12.3f}  {status}")
         phase1.append(dict(n_probe=n_probe, bg_ktokens=bg_tput*_KT, probe_ktokens=probe_tput*_KT,
                            interfered=interfered))
+
         if interfered:
             consecutive_interference += 1
             if consecutive_interference >= interference_threshold_count:
-                break
+                n_full = last_clean_n
+                steps, best_intensity, best_probe_ktokens = _run_phase2(
+                    n_full, last_clean_probe_ktokens)
+                phase2.extend(steps)
+
+                if not any(s['interfered'] for s in steps):
+                    # Phase 2 found no interference at any step: n_full+1 workers
+                    # is clean.  Record it and resume Phase 1 from n_full+2.
+                    verified_n = n_full + 1
+                    print(f"\n  Phase 2 found no interference — probe {verified_n} verified "
+                          f"clean; resuming Phase 1 from probe {verified_n + 1}")
+                    phase1.append(dict(n_probe=verified_n, bg_ktokens=None,
+                                       probe_ktokens=best_probe_ktokens,
+                                       interfered=False, verified_via_phase2=True))
+                    last_clean_n             = verified_n
+                    last_clean_probe_ktokens = best_probe_ktokens
+                    consecutive_interference = 0
+                    n_probe = verified_n + 1
+                    print(f"\n--- Phase 1 (resumed from probe {n_probe}): "
+                          f"Linear {probe_type.upper()} sweep ---")
+                    print(f"  {'Probes':>7}  {'bg (kT/s)':>12}  {probe_type.upper()+' (kT/s)':>12}  {'status':}")
+                    print(f"  {'-------':>7}  {'---------':>12}  {'---------':>12}")
+                    continue
+                else:
+                    break   # Phase 2 found interference — sweep is done
         else:
-            last_clean_n = n_probe
+            last_clean_n             = n_probe
             last_clean_probe_ktokens = probe_tput * _KT
             consecutive_interference = 0
+
+        n_probe += 1
     else:
+        # Phase 1 exhausted max_probes without hitting interference_threshold_count.
         print(f"\n  Reached max_probes={max_probes} without reaching interference threshold.")
-
-    # n_full = last probe count that left background throughput undisturbed.
-    # 0 means even a single probe worker at full intensity causes interference.
-    n_full = last_clean_n
-
-    # ------------------------------------------------------------------
-    # Phase 2: binary search on fractional last worker
-    # ------------------------------------------------------------------
-    print(f"\n--- Phase 2: Binary search  (locked: {n_full} × intensity=1.0) ---")
-    print(f"  {'step':>4}  {'intensity':>9}  {'bg (kT/s)':>12}  {probe_type.upper()+' (kT/s)':>12}  {'status':}")
-    print(f"  {'----':>4}  {'---------':>9}  {'---------':>12}  {'---------':>12}")
-
-    low, high = 0.0, 1.0
-    best_intensity  = 0.0
-    # Seed with the Phase-1 last-clean reading.  If every Phase-2 step
-    # interferes, slack still reports the n_full × intensity=1.0 throughput
-    # (e.g., 7 workers at 20.5 kT/s) rather than collapsing to 0.
-    best_probe_ktokens = last_clean_probe_ktokens
-    phase2: list[dict] = []
-
-    for step in range(1, binary_steps + 1):
-        mid = (low + high) / 2.0
-        bg_tput, probe_tput = run_probe(n_probe_full=n_full, probe_frac=mid, **kw)
-        interfered = bg_tput < threshold
-        status = "interferes" if interfered else "ok"
-        print(f"  {step:>4d}  {mid:>9.3f}  {bg_tput*_KT:>12.3f}  {probe_tput*_KT:>12.3f}  {status}")
-        phase2.append(dict(step=step, intensity=mid,
-                           bg_ktokens=bg_tput*_KT, probe_ktokens=probe_tput*_KT,
-                           interfered=interfered))
-        if not interfered:
-            best_intensity  = mid
-            best_probe_ktokens = probe_tput * _KT
-            low  = mid
-        else:
-            high = mid
+        n_full = last_clean_n
+        steps, best_intensity, best_probe_ktokens = _run_phase2(n_full, last_clean_probe_ktokens)
+        phase2.extend(steps)
 
     slack_ktokens = best_probe_ktokens
 
@@ -338,12 +355,10 @@ def sweep(
         slack_ktokens         = slack_ktokens,
         # raw
         baseline_tput         = baseline_tput,
-        baseline_std          = baseline_std,
         baseline_samples      = n_baseline,
         baseline_runs         = baseline_runs,
         interference_threshold= threshold,
         drop_pct              = drop_pct,
-        threshold_sigma       = threshold_sigma,
         bg_procs              = bg_procs,
         bg_io_mix             = bg_io_mix,
         bg_mem_mix            = bg_mem_mix,
@@ -377,10 +392,7 @@ def main() -> None:
     parser.add_argument("--samples",      type=int,   default=3,     metavar="N",
                         help="number of samples per probe level (default: 3)")
     parser.add_argument("--baseline-samples", type=int, default=1,    metavar="N",
-                        help="number of baseline samples; uses the median (default: 1)")
-    parser.add_argument("--threshold-sigma",  type=float, default=0.0, metavar="K",
-                        help="if >0, also require bg < baseline_median - K*baseline_std "
-                             "for interference (combined with drop_pct via min(); default: 0 = off)")
+                        help="number of baseline samples; uses the mean (default: 1)")
     parser.add_argument("--max-probes",   type=int,   default=64,    metavar="N")
     parser.add_argument("--tmp-dir",      default="/tmp/slack-meter", metavar="DIR")
     parser.add_argument("--worker-bin",   default=WORKER_BIN,        metavar="PATH")
@@ -448,7 +460,6 @@ def main() -> None:
         probe_mem_mode = probe_mem,
         file_size_bytes = args.file_size_mib * 1024 * 1024,
         baseline_samples = args.baseline_samples,
-        threshold_sigma  = args.threshold_sigma,
     )
 
     print("\n" + "=" * 60)
