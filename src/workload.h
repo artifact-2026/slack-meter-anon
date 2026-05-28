@@ -117,6 +117,15 @@ void do_io_read_work(IoState &st, std::mt19937_64 &rng);
 // Issue one 4 KiB O_DIRECT read or write (50/50 probability) to a random aligned offset.
 void do_io_rw_work(IoState &st, std::mt19937_64 &rng);
 
+// Issue 4 random reads + 1 random write (R_heavy).
+void do_io_r_heavy_work(IoState &st, std::mt19937_64 &rng);
+
+// Issue 1 random read + 1 random write + 1 fsync (W_heavy).
+void do_io_w_heavy_work(IoState &st, std::mt19937_64 &rng);
+
+// Issue a 50/50 mix of random read and write (rw_mixed).
+void do_io_rw_mixed_work(IoState &st, std::mt19937_64 &rng);
+
 // Issue one 64 KiB O_DIRECT read from a random 64 KiB-aligned offset (Probe C).
 // Tests whether slack is sensitive to operation granularity vs. 4 KiB
 // rand_read.

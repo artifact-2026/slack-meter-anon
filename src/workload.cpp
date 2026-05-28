@@ -391,6 +391,29 @@ void do_io_rw_work(IoState &st, std::mt19937_64 &rng) {
   }
 }
 
+void do_io_r_heavy_work(IoState &st, std::mt19937_64 &rng) {
+  for (int i = 0; i < 4; ++i) {
+    do_io_read_work(st, rng);
+  }
+  do_io_write_work(st, rng);
+}
+
+void do_io_w_heavy_work(IoState &st, std::mt19937_64 &rng) {
+  do_io_read_work(st, rng);
+  do_io_write_work(st, rng);
+  if (st.fd >= 0) {
+    fdatasync(st.fd);
+  }
+}
+
+void do_io_rw_mixed_work(IoState &st, std::mt19937_64 &rng) {
+  if (rng() % 2 == 0) {
+    do_io_read_work(st, rng);
+  } else {
+    do_io_write_work(st, rng);
+  }
+}
+
 // ----------------------------------------------------------------------------
 // do_io_read_64k_work – issue one 64 KiB O_DIRECT read from a random
 // 64 KiB-aligned offset (Probe C).
@@ -581,7 +604,7 @@ WorkloadResult run_workload(const WorkloadParams &params) {
         // and write SQE at the kernel level.  Until we add per-slot phase
         // tracking (issue read → on-CQE mutate buffer → issue write), fall
         // back to the synchronous path for this mode.
-        if (io_state.use_uring && params.io_mode != "RW_balanced") {
+        if (io_state.use_uring && params.io_mode != "RW_balanced" && params.io_mode != "R_heavy" && params.io_mode != "W_heavy") {
           int in_flight = 0;
           int free_slots[1024];
           int free_count = io_state.queue_depth;
@@ -617,7 +640,7 @@ WorkloadResult run_workload(const WorkloadParams &params) {
                 if (io_state.seq_cursor + SEQ_BUF_SIZE > io_state.file_size) {
                   io_state.seq_cursor = 0;
                 }
-              } else if (params.io_mode == "rand_rw" || params.io_mode == "rand_read_write") {
+              } else if (params.io_mode == "rand_rw" || params.io_mode == "rand_read_write" || params.io_mode == "rw_mixed") {
                 if (rng() % 2 == 0) {
                   offset = (off_t)((rng() % io_state.num_blocks) * IO_BUF_SIZE);
                   io_uring_prep_read(sqe, io_state.fd, buf, len, offset);
@@ -691,9 +714,15 @@ WorkloadResult run_workload(const WorkloadParams &params) {
               do_io_seq_read_work(io_state);
             } else if (params.io_mode == "rand_rw" || params.io_mode == "rand_read_write") {
               do_io_rw_work(io_state, rng);
+            } else if (params.io_mode == "rw_mixed") {
+              do_io_rw_mixed_work(io_state, rng);
             } else if (params.io_mode == "RW_balanced") {
               // RMW: 1 op = pread 4 KiB + mutate sector words + pwrite back.
               do_io_work(io_state, rng);
+            } else if (params.io_mode == "R_heavy") {
+              do_io_r_heavy_work(io_state, rng);
+            } else if (params.io_mode == "W_heavy") {
+              do_io_w_heavy_work(io_state, rng);
             } else {
               // default: rand_write (legacy pure-write path)
               do_io_write_work(io_state, rng);
