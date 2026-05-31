@@ -5,7 +5,7 @@ Slack Meter – Plot Building Block
 Two plot families, each callable as a function or from the CLI.
 
 1. Slack sweep plots  (plot_slack_result)
-   Visualises probe.py output: Phase 1 linear sweep + Phase 2 binary search.
+   Visualises probe.py output: probe throughput (S) and bg throughput (R) over sweep.
    Used by probe.py (imported) and run_loaded_sweep.sh (via --plot flag on probe.py).
 
 2. Experiment CSV bar charts  (plot_case / main)
@@ -56,110 +56,98 @@ _KT = 1e-3   # ops/s → kTokens/s
 def plot_slack_result(result: dict, out_path: Path) -> None:
     """
     Two-panel figure for a probe.py sweep result.
-      Left  – Phase 1 linear sweep (bg throughput + probe throughput vs. # probes)
-      Right – Phase 2 binary search (bg + probe throughput vs. partial intensity)
+      Left  – probe throughput vs. # probes (with S plateau annotated)
+      Right – bg throughput (R) vs. # probes (with B baseline and R-at-plateau annotated)
     """
-    ptype        = result["probe_type"].upper()
-    baseline_kt  = result["baseline_bg_ktokens"]
-    threshold_kt = result["interference_threshold"] * _KT
-    slack_kt     = result["slack_ktokens"]
-    n_full       = result["slack_full"]
-    partial      = result["slack_partial"]
-    p1           = result["phase1_probes"]
-    p2           = result["phase2_probes"]
+    ptype       = result["probe_type"].upper()
+    baseline_kt = result["baseline_bg_ktokens"]   # B
+    slack_kt    = result["slack_ktokens"]          # S
+    r_kt        = result["baseline_r_ktokens"]     # R at plateau
+    p1          = result["phase1_probes"]
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     fig.suptitle(f"{ptype} Sweep Under Background Load — Slack Result",
                  fontsize=12, fontweight="bold")
 
-    # ---- Panel 1: Phase 1 linear sweep ------------------------------------
+    # Find the probe count at which S was achieved (last non-decreasing peak)
+    peak_n = None
+    if p1:
+        peak_val = -1.0
+        for d in p1:
+            if d["probe_ktokens"] >= peak_val:
+                peak_val = d["probe_ktokens"]
+                peak_n   = d["n_probe"]
+
+    # ---- Panel 1: probe throughput (S) ------------------------------------
     ax = axes[0]
     if p1:
-        x  = [0]           + [d["n_probe"]       for d in p1]
-        bg = [baseline_kt] + [d["bg_ktokens"]    for d in p1]
-        pb = [0.0]         + [d["probe_ktokens"] for d in p1]
+        x  = [0]   + [d["n_probe"]       for d in p1]
+        pb = [0.0] + [d["probe_ktokens"] for d in p1]
 
-        ax.plot(x, bg, "o-", color="#4c72b0", label="bg throughput",
-                linewidth=2, markersize=5)
         ax.plot(x, pb, "s-", color="#dd8452", label=f"{ptype.lower()} throughput",
                 linewidth=2, markersize=5)
-        ax.axhline(baseline_kt,  color="#2ca02c", linestyle="--", linewidth=1.4,
-                   label=f"baseline ({baseline_kt:.2f} kT/s)")
-        ax.axhline(threshold_kt, color="#c44e52", linestyle=":",  linewidth=1.4,
-                   label=f"threshold ({threshold_kt:.2f} kT/s, −{result['drop_pct']*100:.0f}%)")
+        ax.axhline(slack_kt, color="#9467bd", linestyle="--", linewidth=1.4,
+                   label=f"S = {slack_kt:.3f} kT/s (plateau)")
 
-        interf = [d for d in p1 if d["interfered"]]
-        if interf:
-            xi = interf[0]["n_probe"]
-            ax.axvline(xi, color="#c44e52", linestyle="--", alpha=0.4)
-            ax.annotate(f"interference\nat {xi} probe(s)",
-                        xy=(xi, threshold_kt), xytext=(xi + 0.3, threshold_kt * 1.08),
-                        fontsize=8, color="#c44e52",
-                        arrowprops=dict(arrowstyle="->", color="#c44e52", lw=1))
+        if peak_n is not None:
+            ax.axvline(peak_n, color="#9467bd", linestyle=":", alpha=0.5)
+            ax.annotate(f"plateau\nn={peak_n}",
+                        xy=(peak_n, slack_kt),
+                        xytext=(peak_n + 0.4, slack_kt * 1.08),
+                        fontsize=8, color="#9467bd",
+                        arrowprops=dict(arrowstyle="->", color="#9467bd", lw=1))
 
-        ax.set_xlabel(f"Number of {ptype} sweep workers")
+        ax.set_xlabel(f"Number of {ptype} probe workers")
         ax.set_ylabel("Throughput (kTokens/s)")
-        ax.set_title("Phase 1 — Linear sweep", fontsize=10, loc="left")
+        ax.set_title(f"Probe throughput → S", fontsize=10, loc="left")
         ax.legend(fontsize=8)
         ax.set_xlim(left=0)
         ax.set_ylim(bottom=0)
 
-    # ---- Panel 2: Phase 2 binary search -----------------------------------
+    # ---- Panel 2: bg throughput (R) over sweep ----------------------------
     ax = axes[1]
-    if p2:
-        x2  = [d["intensity"]      for d in p2]
-        bg2 = [d["bg_ktokens"]     for d in p2]
-        pb2 = [d["probe_ktokens"]  for d in p2]
-        ok  = [not d["interfered"] for d in p2]
+    if p1:
+        x  = [0]           + [d["n_probe"]    for d in p1]
+        bg = [baseline_kt] + [d["bg_ktokens"] for d in p1]
 
-        for xi, bgi, pbi, is_ok in zip(x2, bg2, pb2, ok):
-            c = "#4c72b0" if is_ok else "#c44e52"
-            ax.scatter(xi, bgi, color=c, zorder=5, s=60)
-            ax.scatter(xi, pbi, color="#dd8452", marker="s", zorder=5, s=60)
+        ax.plot(x, bg, "o-", color="#4c72b0", label="bg throughput (R)",
+                linewidth=2, markersize=5)
+        ax.axhline(baseline_kt, color="#2ca02c", linestyle="--", linewidth=1.4,
+                   label=f"B = {baseline_kt:.3f} kT/s (baseline)")
 
-        ax.plot(x2, bg2, "-", color="#4c72b0", alpha=0.4, linewidth=1)
-        ax.plot(x2, pb2, "-", color="#dd8452", alpha=0.4, linewidth=1)
+        if peak_n is not None and r_kt > 0:
+            ax.axhline(r_kt, color="#c44e52", linestyle=":", linewidth=1.4,
+                       label=f"R = {r_kt:.3f} kT/s (at plateau)")
+            ax.axvline(peak_n, color="#9467bd", linestyle=":", alpha=0.5)
+            ax.annotate(f"R at S\n{r_kt:.3f} kT/s",
+                        xy=(peak_n, r_kt),
+                        xytext=(peak_n + 0.4, r_kt * 0.92),
+                        fontsize=8, color="#c44e52",
+                        arrowprops=dict(arrowstyle="->", color="#c44e52", lw=1))
 
-        ax.axhline(baseline_kt,  color="#2ca02c", linestyle="--", linewidth=1.4,
-                   label=f"baseline ({baseline_kt:.2f} kT/s)")
-        ax.axhline(threshold_kt, color="#c44e52", linestyle=":",  linewidth=1.4,
-                   label=f"threshold ({threshold_kt:.2f} kT/s)")
-
-        if partial > 0:
-            ax.axvline(partial, color="#9467bd", linestyle="--", linewidth=1.4,
-                       label=f"best intensity = {partial:.3f}")
-            ax.annotate(f"{ptype.lower()} slack\n{slack_kt:.3f} kT/s",
-                        xy=(partial, slack_kt),
-                        xytext=(partial + 0.05, slack_kt * 1.1),
-                        fontsize=8, color="#9467bd",
-                        arrowprops=dict(arrowstyle="->", color="#9467bd", lw=1))
-
-        from matplotlib.lines import Line2D
-        handles, labels = ax.get_legend_handles_labels()
-        handles += [
-            Line2D([0], [0], marker="o", color="w", markerfacecolor="#4c72b0",
-                   markersize=8, label="bg (ok)"),
-            Line2D([0], [0], marker="o", color="w", markerfacecolor="#c44e52",
-                   markersize=8, label="bg (interferes)"),
-            Line2D([0], [0], marker="s", color="w", markerfacecolor="#dd8452",
-                   markersize=8, label=f"{ptype.lower()} throughput"),
-        ]
-        ax.legend(handles=handles, fontsize=8)
-
-        ax.set_xlabel(f"Partial intensity of last probe\n({n_full} full probe(s) locked at 1.0)")
+        ax.set_xlabel(f"Number of {ptype} probe workers")
         ax.set_ylabel("Throughput (kTokens/s)")
-        ax.set_title("Phase 2 — Binary search", fontsize=10, loc="left")
-        ax.set_xlim(0, 1)
+        ax.set_title("Background throughput → R", fontsize=10, loc="left")
+        ax.legend(fontsize=8)
+        ax.set_xlim(left=0)
         ax.set_ylim(bottom=0)
 
     # ---- Summary text box -------------------------------------------------
-    summary = (
+    cap_kt = result.get("capacity_ktokens")
+    ru_pct = result.get("resource_usage_pct")
+    summary_lines = [
         f"Background load:  {result['bg_procs']} workers  "
-        f"io_mix={result['bg_io_mix']} mem_mix={result['bg_mem_mix']} intensity={result['bg_intensity']}\n"
-        f"Baseline bg:      {baseline_kt:.3f} kTokens/s\n"
-        f"{ptype} slack:        {n_full} full probe(s) + 1 × {partial:.3f}  "
-        f"→  {slack_kt:.3f} kTokens/s of additional {ptype}"
-    )
+        f"io_mix={result['bg_io_mix']} mem_mix={result['bg_mem_mix']} intensity={result['bg_intensity']}",
+        f"Baseline B = {baseline_kt:.3f} kT/s    "
+        f"Slack S = {slack_kt:.3f} kT/s    "
+        f"R at plateau = {r_kt:.3f} kT/s",
+    ]
+    if cap_kt is not None:
+        summary_lines.append(f"Capacity C = {cap_kt:.3f} kT/s")
+    if ru_pct is not None:
+        summary_lines.append(f"Resource usage = (C−S)·B / (C·R) = {ru_pct:.1f}%")
+    summary = "\n".join(summary_lines)
+
     fig.text(0.5, 0.01, summary, ha="center", va="bottom", fontsize=8.5,
              bbox=dict(boxstyle="round,pad=0.4", facecolor="#f0f0f0", alpha=0.8))
 
@@ -167,7 +155,7 @@ def plot_slack_result(result: dict, out_path: Path) -> None:
         ax.grid(axis="y", linestyle=":", linewidth=0.6, alpha=0.7)
         ax.spines[["top", "right"]].set_visible(False)
 
-    fig.tight_layout(rect=[0, 0.10, 1, 0.95])
+    fig.tight_layout(rect=[0, 0.12, 1, 0.95])
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")

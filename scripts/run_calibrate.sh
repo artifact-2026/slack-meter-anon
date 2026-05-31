@@ -5,7 +5,7 @@
 #
 # Optional environment variables:
 #   RESOURCE_TYPE=<type>  cpu | io | ram | cache (default: io)
-#   IO_MODE=<mode>        rand_write | rand_read | rand_read_64k | seq_read (default: rand_write)
+#   IO_MODE=<mode>        rand_write | rand_read | seq_write | seq_read (default: rand_write)
 #   STEP=<int>            Phase 1 concurrency step size (default: 1; use 4 for read modes)
 #   START_N=<int>         Start sweep at this concurrency (skip 1..N-1; optional)
 #   QUEUE_DEPTH=<int>     Queue depth/concurrency per worker for io_uring (default: 1)

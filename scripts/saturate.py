@@ -245,7 +245,7 @@ Mixed workload mode (realistic blend, e.g. before a probe sweep):
                         help="Skip straight to this concurrency level.")
     parser.add_argument("--queue-depth", type=int,   default=1,             metavar="QD")
     parser.add_argument("--io-mode",     default="rand_write",
-                        help="IO mode: rand_write | rand_read | rand_read_64k | seq_read")
+                        help="IO mode: rand_write | rand_read | seq_write | seq_read")
     parser.add_argument("--cpu-mode",    default="cpu_int",
                         help="CPU mode: cpu_int | cpu_fp | cpu_hash")
     parser.add_argument("--mem-mode",    default="mem_copy",
