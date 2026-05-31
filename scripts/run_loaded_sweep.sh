@@ -32,11 +32,10 @@
 #   ----------------------------
 #   DURATION=<secs>      seconds per probe                          (default: 30)
 #   SAMPLES=<n>          number of samples per probe level          (default: 3)
-#   DROP_PCT=<float>     throughput-drop fraction for interference  (default: 0.10)
 #   IO_MIX=<float>       sweep baseline io_mix                      (default: 0.3)
 #   INTENSITY=<float>    sweep baseline intensity                   (default: 0.75)
-#   BG_IO_MODE=<mode>    values: rand_write | rand_read | rand_read_64k | seq_read  (default: rand_write)
-#   PROBE_IO_MODE=<mode> values: rand_write | rand_read | rand_read_64k | seq_read (default: rand_write)
+#   BG_IO_MODE=<mode>    values: rand_write | rand_read | seq_write | seq_read  (default: rand_write)
+#   PROBE_IO_MODE=<mode> values: rand_write | rand_read | seq_write | seq_read  (default: rand_write)
 #   QUEUE_DEPTH=<int>    default queue depth/concurrency per worker for io_uring (default: 1)
 #   BG_QUEUE_DEPTH=<int>    queue depth for background workers (default: QUEUE_DEPTH)
 #   PROBE_QUEUE_DEPTH=<int> queue depth for probe workers (default: QUEUE_DEPTH)
@@ -63,7 +62,7 @@ DEVICE="${DEVICE:-}"
 
 # Sweep / shared params defaults
 MODE="${MODE:-full}"
-DURATION="${DURATION:-45}"
+DURATION="${DURATION:-30}"
 WARMUP="${WARMUP:-15}"
 MAX_PROCS="${MAX_PROCS:-32}"
 MIN_PROCS="${MIN_PROCS:-4}"
@@ -71,9 +70,7 @@ IO_MIX="${IO_MIX:-0.3}"
 INTENSITY="${INTENSITY:-0.75}"
 BG_IO_MODE="${BG_IO_MODE:-${IO_MODE:-rand_write}}"
 PROBE_IO_MODE="${PROBE_IO_MODE:-${IO_MODE:-rand_write}}"
-DROP_PCT="${DROP_PCT:-0.10}"
-INTERFERENCE_COUNT="${INTERFERENCE_COUNT:-3}"
-SAMPLES="${SAMPLES:-3}"
+SAMPLES="${SAMPLES:-1}"
 CPU_MODE="${CPU_MODE:-cpu_int}"
 BG_CPU_MODE="${BG_CPU_MODE:-$CPU_MODE}"
 PROBE_CPU_MODE="${PROBE_CPU_MODE:-$CPU_MODE}"
@@ -108,14 +105,6 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --samples)
             SAMPLES="$2"
-            shift 2
-            ;;
-        --drop-pct)
-            DROP_PCT="$2"
-            shift 2
-            ;;
-        --interference-count)
-            INTERFERENCE_COUNT="$2"
             shift 2
             ;;
         --sweep)
@@ -295,8 +284,6 @@ if [[ "$SWEEP" == "cpu" || "$SWEEP" == "io" || "$SWEEP" == "ram" ]]; then
         --bg-intensity "$BG_INTENSITY"   \
         --duration     "$DURATION"       \
         --warmup       "$WARMUP"         \
-        --drop-pct     "$DROP_PCT"       \
-        --interference-threshold-count "$INTERFERENCE_COUNT" \
         --samples      "$SAMPLES"        \
         --tmp-dir      "$TMP_DIR"        \
         --worker-bin   "$BUILD/worker"   \

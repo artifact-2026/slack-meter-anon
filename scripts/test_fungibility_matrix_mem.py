@@ -157,10 +157,6 @@ def main():
                         help="JSON string or comma-separated key-value list of capacities, e.g., 'mem_copy:10,mem_read:20'")
     parser.add_argument("--capacity-file", type=str, default=None,
                         help="JSON file containing the capacity mapping")
-    parser.add_argument("--drop-pct", type=float, default=0.10,
-                        help="interference drop threshold percentage (default: 0.10)")
-    parser.add_argument("--interference-count", type=int, default=3,
-                        help="interference count to terminate Phase 1 (default: 3)")
     parser.add_argument("--only-plot", action="store_true",
                         help="Skip running sweeps and only generate the plot from existing CSV")
     args = parser.parse_args()
@@ -227,9 +223,6 @@ def main():
                 env["DISABLE_COLLECTORS"] = "1"
                 
                 # Forward configurations
-                env["DROP_PCT"] = str(args.drop_pct)
-                env["INTERFERENCE_COUNT"] = str(args.interference_count)
-                
                 cmd = ["bash", "scripts/run_loaded_sweep.sh"]
                 try:
                     subprocess.run(cmd, env=env, check=True, capture_output=True, text=True)

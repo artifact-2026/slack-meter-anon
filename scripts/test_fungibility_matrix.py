@@ -3,9 +3,9 @@
 test_fungibility_matrix.py
 ==========================
 Runs a matrix experiment to prove the fungibility of the I/O "unit of measure".
-It tests combinations of Background I/O workload intensity and Probe I/O Mode under a mixed 
-I/O background workload (rw_mixed), proving that the Normalized App Footprint calculation 
-((Capacity - Slack) / Capacity) yields a stable measurement of the application's size 
+It tests combinations of Background I/O workload intensity and Probe I/O Mode under a
+rw_mixed background workload, proving that the Normalized App Footprint calculation
+((Capacity - Slack) / Capacity) yields a stable measurement of the application's size
 regardless of the probe used.
 """
 
@@ -18,8 +18,8 @@ import sys
 from pathlib import Path
 from getpass import getuser
 
-# The 3 probe modes
-PROBE_MODES = ["RW_balanced", "R_heavy", "W_heavy"]
+# The 4 fungible I/O probe modes
+PROBE_MODES = ["rand_write", "rand_read", "seq_write", "seq_read"]
 
 def load_capacities(modes, capacity_file=None, capacities_arg=None, out_dir=None):
     caps = {}
@@ -154,7 +154,7 @@ def main():
     parser.add_argument("--duration", type=int, default=60)
     parser.add_argument("--out-dir", type=str, default="results/fungibility_matrix")
     parser.add_argument("--capacities", type=str, default=None,
-                        help="JSON string or comma-separated key-value list of capacities, e.g., 'RW_balanced:100,R_heavy:50,W_heavy:30'")
+                        help="JSON string or comma-separated key-value list of capacities, e.g., 'rand_write:100,rand_read:95,seq_write:80,seq_read:90'")
     parser.add_argument("--capacity-file", type=str, default=None,
                         help="JSON file containing the capacity mapping")
     parser.add_argument("--queue-depth", type=int, default=1,
@@ -163,10 +163,6 @@ def main():
                         help="queue depth/concurrency per background worker")
     parser.add_argument("--probe-queue-depth", type=int, default=None,
                         help="queue depth/concurrency per probe worker")
-    parser.add_argument("--drop-pct", type=float, default=0.10,
-                        help="interference drop threshold percentage (default: 0.10)")
-    parser.add_argument("--interference-count", type=int, default=3,
-                        help="interference count to terminate Phase 1 (default: 3)")
     parser.add_argument("--only-plot", action="store_true",
                         help="Skip running sweeps and only generate the plot from existing CSV")
     args = parser.parse_args()
@@ -236,9 +232,6 @@ def main():
                 env["QUEUE_DEPTH"] = str(args.queue_depth)
                 env["BG_QUEUE_DEPTH"] = str(args.bg_queue_depth if args.bg_queue_depth is not None else args.queue_depth)
                 env["PROBE_QUEUE_DEPTH"] = str(args.probe_queue_depth if args.probe_queue_depth is not None else args.queue_depth)
-                env["DROP_PCT"] = str(args.drop_pct)
-                env["INTERFERENCE_COUNT"] = str(args.interference_count)
-                
                 cmd = ["bash", "scripts/run_loaded_sweep.sh"]
                 try:
                     subprocess.run(cmd, env=env, check=True, capture_output=True, text=True)
