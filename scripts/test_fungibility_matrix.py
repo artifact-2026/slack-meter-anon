@@ -163,6 +163,8 @@ def main():
                         help="queue depth/concurrency per background worker")
     parser.add_argument("--probe-queue-depth", type=int, default=None,
                         help="queue depth/concurrency per probe worker")
+    parser.add_argument("--probe-modes", type=str, default=os.environ.get("PROBE_MODES", ",".join(PROBE_MODES)),
+                        help="comma-separated list of probe modes to sweep (default: all of them)")
     parser.add_argument("--only-plot", action="store_true",
                         help="Skip running sweeps and only generate the plot from existing CSV")
     args = parser.parse_args()
@@ -189,12 +191,13 @@ def main():
                 print(f"  {p}")
             sys.exit(1)
 
-    # Parse intensities to sweep
+    # Parse probe modes and intensities to sweep
+    probe_modes = [x.strip() for x in args.probe_modes.split(",") if x.strip()]
     intensities = [float(x.strip()) for x in args.bg_intensities.split(",") if x.strip()]
 
     # Load capacities (either from CLI, file, or preexisting calibration artifacts)
     if not args.only_plot:
-        capacities = load_capacities(PROBE_MODES, args.capacity_file, args.capacities, out_dir)
+        capacities = load_capacities(probe_modes, args.capacity_file, args.capacities, out_dir)
 
         print("\n" + "="*60)
         print(" Phase 2: Probe Slack for I/O Fungibility Matrix")
@@ -211,7 +214,7 @@ def main():
             print(f" Evaluating Background Workload (rw_mixed) at Intensity: {intensity:.2f}")
             print("-" * 50)
             
-            for probe_mode in PROBE_MODES:
+            for probe_mode in probe_modes:
                 print(f"\n  ---> Probing with {probe_mode} ...")
                 
                 sweep_dir = out_dir / f"bg_intensity_{intensity:.2f}" / f"probe_{probe_mode}"

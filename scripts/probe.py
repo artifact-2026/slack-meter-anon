@@ -238,16 +238,17 @@ def sweep(
     # Phase 1: linear sweep + inline Phase 2 with optional resume
     # ------------------------------------------------------------------
 
-    def _run_phase2(n_full_: int, seed_ktokens: float) -> tuple[list[dict], float, float]:
+    def _run_phase2(n_full_: int, seed_ktokens: float, seed_bg_ktokens: float) -> tuple[list[dict], float, float, float]:
         """Binary-search for the highest fractional probe intensity that leaves
         background throughput undisturbed.  Returns (steps, best_intensity,
-        best_probe_ktokens)."""
+        best_probe_ktokens, best_bg_ktokens)."""
         print(f"\n--- Phase 2: Binary search  (locked: {n_full_} × intensity=1.0) ---")
         print(f"  {'step':>4}  {'intensity':>9}  {'bg (T/s)':>12}  {probe_type.upper()+' (T/s)':>12}  {'status':}")
         print(f"  {'----':>4}  {'---------':>9}  {'---------':>12}  {'---------':>12}")
         low_, high_ = 0.0, 1.0
         best_int_   = 0.0
         best_tput_  = seed_ktokens   # fallback: Phase-1 clean reading
+        best_bg_    = seed_bg_ktokens
         steps_: list[dict] = []
         for step in range(1, binary_steps + 1):
             mid = (low_ + high_) / 2.0
@@ -261,10 +262,11 @@ def sweep(
             if not int2:
                 best_int_  = mid
                 best_tput_ = p2 * _KT
+                best_bg_   = bg2 * _KT
                 low_  = mid
             else:
                 high_ = mid
-        return steps_, best_int_, best_tput_
+        return steps_, best_int_, best_tput_, best_bg_
 
     print(f"\n--- Phase 1: Linear {probe_type.upper()} sweep ---")
     print(f"  {'Probes':>7}  {'bg (T/s)':>12}  {probe_type.upper()+' (T/s)':>12}  {'status':}")
@@ -275,8 +277,10 @@ def sweep(
     consecutive_interference = 0
     last_clean_n             = 0
     last_clean_probe_ktokens = 0.0
+    last_clean_bg_ktokens    = baseline_tput * _KT
     best_intensity           = 0.0
     best_probe_ktokens       = 0.0
+    best_bg_ktokens          = baseline_tput * _KT
     n_full                   = 0
 
     n_probe = 1
@@ -292,8 +296,8 @@ def sweep(
             consecutive_interference += 1
             if consecutive_interference >= interference_threshold_count:
                 n_full = last_clean_n
-                steps, best_intensity, best_probe_ktokens = _run_phase2(
-                    n_full, last_clean_probe_ktokens)
+                steps, best_intensity, best_probe_ktokens, best_bg_ktokens = _run_phase2(
+                    n_full, last_clean_probe_ktokens, last_clean_bg_ktokens)
                 phase2.extend(steps)
 
                 if not any(s['interfered'] for s in steps):
@@ -306,6 +310,7 @@ def sweep(
                                        interfered=False, verified_via_phase2=True))
                     last_clean_n             = verified_n
                     last_clean_probe_ktokens = best_probe_ktokens
+                    last_clean_bg_ktokens    = best_bg_ktokens
                     consecutive_interference = 0
                     n_probe = verified_n + 1
                     print(f"\n--- Phase 1 (resumed from probe {n_probe}): "
@@ -318,6 +323,7 @@ def sweep(
         else:
             last_clean_n             = n_probe
             last_clean_probe_ktokens = probe_tput * _KT
+            last_clean_bg_ktokens    = bg_tput * _KT
             consecutive_interference = 0
 
         n_probe += 1
@@ -325,10 +331,12 @@ def sweep(
         # Phase 1 exhausted max_probes without hitting interference_threshold_count.
         print(f"\n  Reached max_probes={max_probes} without reaching interference threshold.")
         n_full = last_clean_n
-        steps, best_intensity, best_probe_ktokens = _run_phase2(n_full, last_clean_probe_ktokens)
+        steps, best_intensity, best_probe_ktokens, best_bg_ktokens = _run_phase2(
+            n_full, last_clean_probe_ktokens, last_clean_bg_ktokens)
         phase2.extend(steps)
 
     slack_ktokens = best_probe_ktokens
+    baseline_r_ktokens = best_bg_ktokens
 
     print(f"\n  {probe_type.upper()} slack: {n_full} full worker(s) + 1 at intensity {best_intensity:.3f}")
     if n_full == 0 and best_intensity == 0.0:
@@ -340,6 +348,7 @@ def sweep(
         # kTokens summary
         baseline_bg_ktokens   = baseline_tput * _KT,
         slack_ktokens         = slack_ktokens,
+        baseline_r_ktokens    = baseline_r_ktokens,
         # raw
         baseline_tput         = baseline_tput,
         baseline_samples      = n_baseline,
