@@ -186,6 +186,8 @@ def sweep(
     probe_mem_mode: str = "mem_copy",
     file_size_bytes: int = 0,
     baseline_samples: int = 1,
+    step:         int = 1,
+    start_n:      int = 1,
 ) -> dict:
     os.makedirs(tmp_dir, exist_ok=True)
     
@@ -283,7 +285,8 @@ def sweep(
     best_bg_ktokens          = baseline_tput * _KT
     n_full                   = 0
 
-    n_probe = 1
+    n_probe = start_n
+    step_size = step
     while n_probe <= max_probes:
         bg_tput, probe_tput = run_probe(n_probe_full=n_probe, probe_frac=0.0, **kw)
         interfered = bg_tput < threshold
@@ -293,40 +296,49 @@ def sweep(
                            interfered=interfered))
 
         if interfered:
-            consecutive_interference += 1
-            if consecutive_interference >= interference_threshold_count:
-                n_full = last_clean_n
-                steps, best_intensity, best_probe_ktokens, best_bg_ktokens = _run_phase2(
-                    n_full, last_clean_probe_ktokens, last_clean_bg_ktokens)
-                phase2.extend(steps)
+            if step_size > 1:
+                backtrack_start = last_clean_n + 1
+                print(f"\n  [backtrack] Interference detected at {n_probe}. Backtracking to {backtrack_start} with step=1...")
+                n_probe = backtrack_start
+                step_size = 1
+                consecutive_interference = 0
+                continue
+            else:
+                consecutive_interference += 1
+                if consecutive_interference >= interference_threshold_count:
+                    n_full = last_clean_n
+                    steps, best_intensity, best_probe_ktokens, best_bg_ktokens = _run_phase2(
+                        n_full, last_clean_probe_ktokens, last_clean_bg_ktokens)
+                    phase2.extend(steps)
 
-                if not any(s['interfered'] for s in steps):
-                    # Phase 2 found no interference: n_full+1 is clean. Resume Phase 1 from n_full+2.
-                    verified_n = n_full + 1
-                    print(f"\n  Phase 2 found no interference — probe {verified_n} verified "
-                          f"clean; resuming Phase 1 from probe {verified_n + 1}")
-                    phase1.append(dict(n_probe=verified_n, bg_ktokens=None,
-                                       probe_ktokens=best_probe_ktokens,
-                                       interfered=False, verified_via_phase2=True))
-                    last_clean_n             = verified_n
-                    last_clean_probe_ktokens = best_probe_ktokens
-                    last_clean_bg_ktokens    = best_bg_ktokens
-                    consecutive_interference = 0
-                    n_probe = verified_n + 1
-                    print(f"\n--- Phase 1 (resumed from probe {n_probe}): "
-                          f"Linear {probe_type.upper()} sweep ---")
-                    print(f"  {'Probes':>7}  {'bg (T/s)':>12}  {probe_type.upper()+' (T/s)':>12}  {'status':}")
-                    print(f"  {'-------':>7}  {'---------':>12}  {'---------':>12}")
-                    continue
-                else:
-                    break   # Phase 2 found interference — sweep is done
+                    if not any(s['interfered'] for s in steps):
+                        # Phase 2 found no interference: n_full+1 is clean. Resume Phase 1 from n_full+2.
+                        verified_n = n_full + 1
+                        print(f"\n  Phase 2 found no interference — probe {verified_n} verified "
+                              f"clean; resuming Phase 1 from probe {verified_n + 1}")
+                        phase1.append(dict(n_probe=verified_n, bg_ktokens=None,
+                                           probe_ktokens=best_probe_ktokens,
+                                           interfered=False, verified_via_phase2=True))
+                        last_clean_n             = verified_n
+                        last_clean_probe_ktokens = best_probe_ktokens
+                        last_clean_bg_ktokens    = best_bg_ktokens
+                        consecutive_interference = 0
+                        n_probe = verified_n + 1
+                        step_size = step
+                        print(f"\n--- Phase 1 (resumed from probe {n_probe} with step {step_size}): "
+                              f"Linear {probe_type.upper()} sweep ---")
+                        print(f"  {'Probes':>7}  {'bg (T/s)':>12}  {probe_type.upper()+' (T/s)':>12}  {'status':}")
+                        print(f"  {'-------':>7}  {'---------':>12}  {'---------':>12}")
+                        continue
+                    else:
+                        break   # Phase 2 found interference — sweep is done
         else:
             last_clean_n             = n_probe
             last_clean_probe_ktokens = probe_tput * _KT
             last_clean_bg_ktokens    = bg_tput * _KT
             consecutive_interference = 0
 
-        n_probe += 1
+        n_probe += step_size
     else:
         # Phase 1 exhausted max_probes without hitting interference_threshold_count.
         print(f"\n  Reached max_probes={max_probes} without reaching interference threshold.")
@@ -387,6 +399,10 @@ def main() -> None:
                         help="number of interference events required to terminate Phase 1 (default: 3)")
     parser.add_argument("--samples",      type=int,   default=1,     metavar="N",
                         help="number of samples per probe level (default: 3)")
+    parser.add_argument("--step",         type=int,   default=1,     metavar="N",
+                        help="Phase 1 sweep step size (default: 1)")
+    parser.add_argument("--start-n",      type=int,   default=1,     metavar="N",
+                        help="Phase 1 sweep starting concurrency (default: 1)")
     parser.add_argument("--baseline-samples", type=int, default=1,    metavar="N",
                         help="number of baseline samples; uses the mean (default: 1)")
     parser.add_argument("--max-probes",   type=int,   default=64,    metavar="N")
@@ -456,6 +472,8 @@ def main() -> None:
         probe_mem_mode = probe_mem,
         file_size_bytes = args.file_size_mib * 1024 * 1024,
         baseline_samples = args.baseline_samples,
+        step             = args.step,
+        start_n          = args.start_n,
     )
 
     print("\n" + "=" * 60)
