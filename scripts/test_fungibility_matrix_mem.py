@@ -248,8 +248,8 @@ def main():
                 app_usage = cap - slack
                 footprint_pct = (app_usage / cap) * 100 if cap > 0 else 0
                 
-                print(f"       Capacity:  {cap:.2f} kT/s")
-                print(f"       Slack:     {slack:.3f} kT/s")
+                print(f"       Capacity:  {cap*1000:.0f} Tokens/s")
+                print(f"       Slack:     {slack*1000:.0f} Tokens/s")
                 print(f"       Footprint: {footprint_pct:.2f}%")
                 
                 with open(csv_path, "a", newline="") as f:
