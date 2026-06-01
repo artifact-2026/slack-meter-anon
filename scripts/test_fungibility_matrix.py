@@ -176,17 +176,18 @@ def main():
 
     # Pre-flight: ensure no entries in out_dir are owned by a different user
     current_uid = os.getuid()
-    bad_paths = [
-        p for p in out_dir.rglob("*")
-        if p.stat().st_uid != current_uid
-    ]
-    if bad_paths:
-        print("\nERROR: The following paths in the output directory are owned by a different user")
-        print("       (likely created by a previous 'sudo' run). Fix with:\n")
-        print(f"  sudo chown -R {getuser()} {out_dir}\n")
-        for p in bad_paths:
-            print(f"  {p}")
-        sys.exit(1)
+    if current_uid != 0:
+        bad_paths = [
+            p for p in out_dir.rglob("*")
+            if p.stat().st_uid != current_uid
+        ]
+        if bad_paths:
+            print("\nERROR: The following paths in the output directory are owned by a different user")
+            print("       (likely created by a previous 'sudo' run). Fix with:\n")
+            print(f"  sudo chown -R {getuser()} {out_dir}\n")
+            for p in bad_paths:
+                print(f"  {p}")
+            sys.exit(1)
 
     # Parse intensities to sweep
     intensities = [float(x.strip()) for x in args.bg_intensities.split(",") if x.strip()]

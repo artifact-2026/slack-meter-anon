@@ -1,45 +1,88 @@
 # docker-compose.yml
 # Run from the repo root:   docker compose -f infra/docker-compose.yml up
 #
-# Single service with both CPU and I/O caps:
-#   4 cores, 400 MB/s read+write
+# Services:
+#   experiment          - saturation sweep (default entrypoint)
+#   calibrate           - capacity calibration (must run before fungibility tests)
+#   fungibility-io      - test_fungibility_matrix.py
+#   fungibility-cpu     - test_fungibility_matrix_cpu.py
+#   fungibility-mem     - test_fungibility_matrix_mem.py
+#
+# All services share the same image, blkio limits, and environment so that
+# calibration and experiments run under identical I/O constraints.
 #
 # Note: blkio limits require Linux with root and a real block device path.
 # Find yours on your Cloudlab node with: lsblk
-# Common values: /dev/sda, /dev/sdb, /dev/nvme0n1
+# Common values: /dev/sda, /dev/sdb, /dev/nvme0n1, /dev/nvme1n1
 # These limits are NOT enforced on Mac Docker Desktop; run on Cloudlab for real experiments.
+#
+# Usage examples:
+#   docker compose -f infra/docker-compose.yml run calibrate
+#   docker compose -f infra/docker-compose.yml run fungibility-io
+#   docker compose -f infra/docker-compose.yml run experiment
 
 version: "3.8"
+
+x-base: &base
+  build:
+    context: ..
+    dockerfile: infra/Dockerfile
+  cpus: 4.0
+  mem_limit: 4g
+  blkio_config:
+    device_write_bps:
+      - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
+        rate: 838860800
+    device_read_bps:
+      - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
+        rate: 838860800
+    device_write_iops:
+      - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
+        rate: 100000
+    device_read_iops:
+      - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
+        rate: 100000
+  environment:
+    PYTHONUNBUFFERED: "1"
+    MODE: ${MODE:-full}
+    DURATION: ${DURATION:-60}
+    WARMUP: ${WARMUP:-5}
+    MAX_PROCS: ${MAX_PROCS:-32}
+    MIN_PROCS: ${MIN_PROCS:-10}
+    IO_MIX: ${IO_MIX:-0.3}
+    INTENSITY: ${INTENSITY:-0.75}
+    IO_MODE: ${IO_MODE:-rand_write}
+    DROP_PCT: ${DROP_PCT:-0.05}
+    SAMPLES: ${SAMPLES:-3}
+    RESOURCE_TYPE: ${RESOURCE_TYPE:-io}
+    QUEUE_DEPTH: ${QUEUE_DEPTH:-1}
+    TMP_DIR: ${TMP_DIR:-/holly/scratch}
+  volumes:
+    - ../results:/app/results
+    - ../scripts:/app/scripts
+    - ./scratch:/holly/scratch
+    - ./slack-meter-calibrate:/holly/slack-meter-calibrate
+    - ./slack-meter-loaded-sweep:/holly/slack-meter-loaded-sweep
+    - ./slack-meter-saturate:/holly/slack-meter-saturate
 
 services:
 
   experiment:
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
-    cpus: 4.0
-    mem_limit: 4g
-    blkio_config:
-      device_write_bps:
-        - path: ${BLOCK_DEVICE:-/dev/null}
-          rate: 225000000
-      device_read_bps:
-        - path: ${BLOCK_DEVICE:-/dev/null}
-          rate: 650000000
-    environment:
-      PYTHONUNBUFFERED: "1"
-      MODE: ${MODE:-full}
-      DURATION: ${DURATION:-60}
-      WARMUP: ${WARMUP:-5}
-      MAX_PROCS: ${MAX_PROCS:-32}
-      MIN_PROCS: ${MIN_PROCS:-10}
-      IO_MIX: ${IO_MIX:-0.3}
-      INTENSITY: ${INTENSITY:-0.75}
-      IO_MODE: ${IO_MODE:-rand_write}
-      DROP_PCT: ${DROP_PCT:-0.05}
-      SAMPLES: ${SAMPLES:-3}
-    volumes:
-      - ../results:/app/results
-      - ./scratch:/holly/scratch
-      - ./slack-meter-calibrate:/holly/slack-meter-calibrate
-      - ./slack-meter-loaded-sweep:/holly/slack-meter-loaded-sweep
+    <<: *base
+    # entrypoint inherited from Dockerfile: run_saturation_sweep.sh
+
+  calibrate:
+    <<: *base
+    entrypoint: ["bash", "/app/scripts/run_calibrate.sh"]
+
+  fungibility-io:
+    <<: *base
+    entrypoint: ["python3", "/app/scripts/test_fungibility_matrix.py"]
+
+  fungibility-cpu:
+    <<: *base
+    entrypoint: ["python3", "/app/scripts/test_fungibility_matrix_cpu.py"]
+
+  fungibility-mem:
+    <<: *base
+    entrypoint: ["python3", "/app/scripts/test_fungibility_matrix_mem.py"]
