@@ -32,10 +32,10 @@ x-base: &base
   blkio_config:
     device_write_bps:
       - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
-        rate: 838860800
+        rate: 419430400
     device_read_bps:
       - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
-        rate: 838860800
+        rate: 419430400
     device_write_iops:
       - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
         rate: 100000
@@ -73,16 +73,16 @@ services:
 
   calibrate:
     <<: *base
-    entrypoint: ["bash", "/app/scripts/run_calibrate.sh"]
+    entrypoint: [ "bash", "/app/scripts/run_calibrate.sh" ]
 
   fungibility-io:
     <<: *base
-    entrypoint: ["python3", "/app/scripts/test_fungibility_matrix.py"]
+    entrypoint: [ "python3", "/app/scripts/test_fungibility_matrix.py" ]
 
   fungibility-cpu:
     <<: *base
-    entrypoint: ["python3", "/app/scripts/test_fungibility_matrix_cpu.py"]
+    entrypoint: [ "python3", "/app/scripts/test_fungibility_matrix_cpu.py" ]
 
   fungibility-mem:
     <<: *base
-    entrypoint: ["python3", "/app/scripts/test_fungibility_matrix_mem.py"]
+    entrypoint: [ "python3", "/app/scripts/test_fungibility_matrix_mem.py" ]
