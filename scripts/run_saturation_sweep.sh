@@ -12,14 +12,16 @@
 #   MODE=saturation          only run saturate.py  (default)
 #   MODE=slack-cpu           saturate + probe cpu
 #   MODE=slack-io            saturate + probe io
-#   MODE=full                saturate + probe cpu + probe io
+#   MODE=slack-mem           saturate + probe memory
+#   MODE=full                saturate + probe cpu + probe io + probe memory
 #
 # Optional environment variables:
-#   MODE=<mode>              saturation | slack-cpu | slack-io | full  (default: saturation)
+#   MODE=<mode>              saturation | slack-cpu | slack-io | slack-mem | full  (default: saturation)
 #   DURATION=<secs>          seconds per worker probe                  (default: 60)
 #   WARMUP=<secs>            warmup per worker                         (default: 5)
 #   MAX_PROCS=<n>            max processes in saturation sweep         (default: 32)
 #   IO_MIX=<float>           mixed workload io_mix                     (default: 0.3)
+#   MEM_MIX=<float>          mixed workload mem_mix                     (default: 0.0)
 #   INTENSITY=<float>        mixed workload intensity                  (default: 0.75)
 #   DROP_PCT=<float>         throughput-drop fraction for interference (default: 0.05)
 #   SAMPLES=<n>              samples per probe level                   (default: 3)
@@ -34,6 +36,9 @@
 #   INTERVAL=<secs>          iostat/vmstat sampling interval           (default: 1)
 #   OUTPUT_DIR=<path>        where to write results                    (default: results/sweep_timeseries)
 #   SKIP_BUILD=1             skip cmake build step
+#
+# Usage examples:
+#   MODE=full IO_MIX=0.3 MEM_MIX=0.2 bash scripts/run_saturation_sweep.sh
 
 set -euo pipefail
 
@@ -45,6 +50,7 @@ DURATION="${DURATION:-60}"
 WARMUP="${WARMUP:-5}"
 MAX_PROCS="${MAX_PROCS:-32}"
 IO_MIX="${IO_MIX:-0.3}"
+MEM_MIX="${MEM_MIX:-0.0}"
 INTENSITY="${INTENSITY:-0.75}"
 DROP_PCT="${DROP_PCT:-0.05}"
 SAMPLES="${SAMPLES:-3}"
@@ -141,12 +147,13 @@ IOSTAT_PID=$!
 # ---------------------------------------------------------------------------
 # Phase 1 — Saturation (always runs)
 # ---------------------------------------------------------------------------
-log "Phase 1: finding saturation point  io_mix=$IO_MIX  intensity=$INTENSITY  max_procs=$MAX_PROCS"
+log "Phase 1: finding saturation point  io_mix=$IO_MIX  mem_mix=$MEM_MIX  intensity=$INTENSITY  max_procs=$MAX_PROCS"
 
 SAT_OUTPUT="$OUTPUT_DIR/saturation.json"
 
 python3 "$REPO/scripts/saturate.py" \
     --io-mix     "$IO_MIX"          \
+    --mem-mix    "$MEM_MIX"         \
     --intensity  "$INTENSITY"       \
     --duration   "$DURATION"        \
     --warmup     "$WARMUP"          \
@@ -172,6 +179,7 @@ run_probe() {
         --probe-type    "$probe_type"          \
         --bg-procs      "$BG_PROCS"            \
         --bg-io-mix     "$IO_MIX"              \
+        --bg-mem-mix    "$MEM_MIX"             \
         --bg-intensity  "$INTENSITY"           \
         --duration      "$DURATION"            \
         --warmup        "$WARMUP"              \
@@ -198,12 +206,16 @@ case "$MODE" in
     slack-io)
         run_probe io
         ;;
+    slack-mem)
+        run_probe ram
+        ;;
     full)
         run_probe cpu
         run_probe io
+        run_probe ram
         ;;
     *)
-        echo "[sweep-ts] ERROR: MODE must be saturation|slack-cpu|slack-io|full (got '$MODE')" >&2
+        echo "[sweep-ts] ERROR: MODE must be saturation|slack-cpu|slack-io|slack-mem|full (got '$MODE')" >&2
         exit 1
         ;;
 esac
@@ -226,6 +238,7 @@ python3 "$REPO/scripts/plot_timeseries.py" \
     --device     "${DEVICE:-}" \
     --interval   "$INTERVAL"   \
     --io-mix     "$IO_MIX"     \
+    --mem-mix    "$MEM_MIX"    \
     --intensity  "$INTENSITY"
 
 log "Done!"
@@ -235,6 +248,9 @@ case "$MODE" in
 esac
 case "$MODE" in
     slack-io|full)  log "  IO probe result   : $OUTPUT_DIR/probe_io.json" ;;
+esac
+case "$MODE" in
+    slack-mem|full) log "  Memory probe result: $OUTPUT_DIR/probe_ram.json" ;;
 esac
 log "  Time-series plot  : $OUTPUT_DIR/timeseries.png"
 log "  Raw collectors    : $OUTPUT_DIR/vmstat_raw.txt  $OUTPUT_DIR/iostat_raw.txt"

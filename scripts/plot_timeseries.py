@@ -372,6 +372,7 @@ def main() -> None:
                         help="Sampling interval used when collecting (seconds)")
     parser.add_argument("--nprocs",     type=int, default=0,  metavar="N")
     parser.add_argument("--io-mix",     type=float, default=0.3, metavar="F")
+    parser.add_argument("--mem-mix",    type=float, default=0.0, metavar="F")
     parser.add_argument("--intensity",  type=float, default=0.75, metavar="F")
     args = parser.parse_args()
 
@@ -401,7 +402,7 @@ def main() -> None:
     extra = ""
     if args.nprocs:
         extra = (f"{args.nprocs} worker{'s' if args.nprocs != 1 else ''}  "
-                 f"io_mix={args.io_mix}  intensity={args.intensity}")
+                 f"io_mix={args.io_mix}  mem_mix={args.mem_mix}  intensity={args.intensity}")
 
     plot(
         vmstat_rows=vmstat_rows,
