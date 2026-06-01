@@ -73,12 +73,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-#ifndef HAS_URING
-    if (params.queue_depth > 1) {
-        fprintf(stderr, "[worker] warning: --queue-depth %d requested, but worker was compiled without io_uring support. Falling back to synchronous I/O.\n", params.queue_depth);
-    }
-#endif
-
     // Ensure tmp dir exists (best-effort; orchestrator should create it first)
     char mkdircmd[600];
     snprintf(mkdircmd, sizeof(mkdircmd), "mkdir -p %s", params.tmp_dir.c_str());
