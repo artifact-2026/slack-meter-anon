@@ -37,7 +37,8 @@ static constexpr int CPU_ITERS = 18'400;
 // scratch file.  Not stored in IoState; a local buffer is allocated and freed.
 static constexpr size_t FILL_CHUNK = 1048576;
 
-// Legacy transfer sizes (used by the legacy I/O ops at the bottom of this file).
+// Legacy transfer sizes (used by the legacy I/O ops at the bottom of this
+// file).
 static constexpr size_t BUF_64K_SIZE = 65536;   // rand_read_64k
 static constexpr size_t SEQ_BUF_SIZE = 1048576; // seq_read (1 MiB sequential)
 
@@ -80,10 +81,8 @@ void do_cpu_hash_work() {
 //   4. Pre-fill with non-zero data (ensures reads never hit unwritten extents).
 //   5. Allocate a 4 KiB posix_memalign'd buffer for all I/O ops.
 // ----------------------------------------------------------------------------
-IoState open_io_file(const std::string &tmp_dir,
-                     const std::string &io_mode,
-                     int queue_depth,
-                     size_t file_size) {
+IoState open_io_file(const std::string &tmp_dir, const std::string &io_mode,
+                     int queue_depth, size_t file_size) {
   IoState st;
 
   const char *worker_id_env = getenv("WORKER_ID");
@@ -133,8 +132,10 @@ IoState open_io_file(const std::string &tmp_dir,
     if (fallocate(st.fd, 0, 0, (off_t)file_size) != 0 &&
         ftruncate(st.fd, (off_t)file_size) != 0) {
 #endif
-      close(st.fd); st.fd = -1;
-      free(st.buf); st.buf = nullptr;
+      close(st.fd);
+      st.fd = -1;
+      free(st.buf);
+      st.buf = nullptr;
       unlink(path);
       return st;
     }
@@ -156,10 +157,10 @@ IoState open_io_file(const std::string &tmp_dir,
     }
   }
 
-  st.file_size      = file_size;
-  st.num_blocks     = file_size / IO_BUF_SIZE;
+  st.file_size = file_size;
+  st.num_blocks = file_size / IO_BUF_SIZE;
   st.num_blocks_64k = file_size / BUF_64K_SIZE;
-  st.seq_cursor     = 0;
+  st.seq_cursor = 0;
 
   // Legacy large-transfer buffers — allocated so the legacy ops work if called.
   if (posix_memalign(&st.buf_64k, BUF_64K_SIZE, BUF_64K_SIZE) != 0)
@@ -175,7 +176,8 @@ IoState open_io_file(const std::string &tmp_dir,
   if (st.queue_depth > 1) {
     if (io_uring_queue_init(st.queue_depth, &st.ring, 0) == 0) {
       st.use_uring = true;
-      st.ring_bufs = static_cast<void **>(calloc(st.queue_depth, sizeof(void *)));
+      st.ring_bufs =
+          static_cast<void **>(calloc(st.queue_depth, sizeof(void *)));
       if (st.ring_bufs) {
         for (int i = 0; i < st.queue_depth; ++i) {
           if (posix_memalign(&st.ring_bufs[i], IO_BUF_SIZE, IO_BUF_SIZE) != 0)
@@ -203,10 +205,22 @@ IoState open_io_file(const std::string &tmp_dir,
 // close_io_file – tear down the IoState opened by open_io_file.
 // ----------------------------------------------------------------------------
 void close_io_file(IoState &st) {
-  if (st.fd >= 0)     { close(st.fd);      st.fd      = -1;      }
-  if (st.buf)         { free(st.buf);       st.buf     = nullptr; }
-  if (st.buf_64k)     { free(st.buf_64k);   st.buf_64k = nullptr; }
-  if (st.seq_buf)     { free(st.seq_buf);   st.seq_buf = nullptr; }
+  if (st.fd >= 0) {
+    close(st.fd);
+    st.fd = -1;
+  }
+  if (st.buf) {
+    free(st.buf);
+    st.buf = nullptr;
+  }
+  if (st.buf_64k) {
+    free(st.buf_64k);
+    st.buf_64k = nullptr;
+  }
+  if (st.seq_buf) {
+    free(st.seq_buf);
+    st.seq_buf = nullptr;
+  }
   if (!st.path.empty()) {
     const char *reuse_env = getenv("REUSE_FILE");
     bool reuse = reuse_env && strcmp(reuse_env, "1") == 0;
@@ -221,7 +235,8 @@ void close_io_file(IoState &st) {
   }
   if (st.ring_bufs) {
     for (int i = 0; i < st.queue_depth; ++i)
-      if (st.ring_bufs[i]) free(st.ring_bufs[i]);
+      if (st.ring_bufs[i])
+        free(st.ring_bufs[i]);
     free(st.ring_bufs);
     st.ring_bufs = nullptr;
   }
@@ -236,18 +251,30 @@ void close_io_file(IoState &st) {
 // Mutates one 8-byte word per 512-byte sector before writing to defeat
 // sub-block deduplication at the storage layer.
 void do_io_work_4k_rand_write(IoState &st, std::mt19937_64 &rng) {
-  if (st.fd < 0 || !st.buf) return;
+  if (st.fd < 0 || !st.buf)
+    return;
   uint64_t *p = static_cast<uint64_t *>(st.buf);
   for (int i = 0; i < 8; ++i)
     p[i * (512 / sizeof(uint64_t))] = rng();
   const off_t offset = (off_t)((rng() % st.num_blocks) * IO_BUF_SIZE);
   ssize_t ret = pwrite(st.fd, st.buf, IO_BUF_SIZE, offset);
-  if (ret != (ssize_t)IO_BUF_SIZE) { perror("pwrite rand_write"); abort(); }
+  if (ret != (ssize_t)IO_BUF_SIZE) {
+    perror("pwrite rand_write");
+    abort();
+  }
+
+  // Read target sleep padding from environment
+  static const char *pad_env = getenv("WRITE_PAD_NS");
+  static const long long pad_ns = pad_env ? std::atoll(pad_env) : 0;
+  if (pad_ns > 0) {
+    std::this_thread::sleep_for(std::chrono::nanoseconds(pad_ns));
+  }
 }
 
 // pread 4 KiB from a random aligned offset (rand_read).
 void do_io_work_4k_rand_read(IoState &st, std::mt19937_64 &rng) {
-  if (st.fd < 0 || !st.buf) return;
+  if (st.fd < 0 || !st.buf)
+    return;
   const off_t offset = (off_t)((rng() % st.num_blocks) * IO_BUF_SIZE);
   [[maybe_unused]] ssize_t n = pread(st.fd, st.buf, IO_BUF_SIZE, offset);
 }
@@ -255,24 +282,31 @@ void do_io_work_4k_rand_read(IoState &st, std::mt19937_64 &rng) {
 // pwrite 4 KiB at seq_cursor; advance cursor by IO_BUF_SIZE, wrap at file_size.
 // Mutates sector words before writing (same dedup-defeat as rand_write).
 void do_io_work_4k_seq_write(IoState &st, std::mt19937_64 &rng) {
-  if (st.fd < 0 || !st.buf) return;
+  if (st.fd < 0 || !st.buf)
+    return;
   uint64_t *p = static_cast<uint64_t *>(st.buf);
   for (int i = 0; i < 8; ++i)
     p[i * (512 / sizeof(uint64_t))] = rng();
   const off_t offset = (off_t)st.seq_cursor;
   ssize_t ret = pwrite(st.fd, st.buf, IO_BUF_SIZE, offset);
-  if (ret != (ssize_t)IO_BUF_SIZE) { perror("pwrite seq_write"); abort(); }
+  if (ret != (ssize_t)IO_BUF_SIZE) {
+    perror("pwrite seq_write");
+    abort();
+  }
   st.seq_cursor += IO_BUF_SIZE;
-  if (st.seq_cursor >= st.file_size) st.seq_cursor = 0;
+  if (st.seq_cursor >= st.file_size)
+    st.seq_cursor = 0;
 }
 
 // pread 4 KiB at seq_cursor; advance cursor by IO_BUF_SIZE, wrap at file_size.
 void do_io_work_4k_seq_read(IoState &st) {
-  if (st.fd < 0 || !st.buf) return;
+  if (st.fd < 0 || !st.buf)
+    return;
   const off_t offset = (off_t)st.seq_cursor;
   [[maybe_unused]] ssize_t n = pread(st.fd, st.buf, IO_BUF_SIZE, offset);
   st.seq_cursor += IO_BUF_SIZE;
-  if (st.seq_cursor >= st.file_size) st.seq_cursor = 0;
+  if (st.seq_cursor >= st.file_size)
+    st.seq_cursor = 0;
 }
 
 // ----------------------------------------------------------------------------
@@ -284,30 +318,40 @@ MemState open_mem_buf() {
   MemState st;
   st.n = MEM_BUF_DOUBLES;
   st.buf = static_cast<double *>(malloc(2 * st.n * sizeof(double)));
-  if (!st.buf) { st.n = 0; return st; }
+  if (!st.buf) {
+    st.n = 0;
+    return st;
+  }
   for (size_t i = 0; i < 2 * st.n; ++i)
     st.buf[i] = static_cast<double>(i + 1);
   return st;
 }
 
 void do_mem_work(MemState &st, const std::string &mem_mode) {
-  if (!st.buf) return;
+  if (!st.buf)
+    return;
   double *lo = st.buf;
   double *hi = st.buf + st.n;
   if (mem_mode == "mem_read") {
     volatile double sum = 0.0;
-    for (size_t i = 0; i < 2 * st.n; ++i) sum += st.buf[i];
+    for (size_t i = 0; i < 2 * st.n; ++i)
+      sum += st.buf[i];
   } else if (mem_mode == "mem_write") {
-    for (size_t i = 0; i < 2 * st.n; ++i) st.buf[i] = 3.0;
+    for (size_t i = 0; i < 2 * st.n; ++i)
+      st.buf[i] = 3.0;
   } else {
     // default: mem_copy / STREAM-scale
-    for (size_t i = 0; i < st.n; ++i) lo[i] = MEM_SCALAR * hi[i];
-    for (size_t i = 0; i < st.n; ++i) hi[i] = MEM_SCALAR * lo[i];
+    for (size_t i = 0; i < st.n; ++i)
+      lo[i] = MEM_SCALAR * hi[i];
+    for (size_t i = 0; i < st.n; ++i)
+      hi[i] = MEM_SCALAR * lo[i];
   }
 }
 
 void close_mem_buf(MemState &st) {
-  free(st.buf); st.buf = nullptr; st.n = 0;
+  free(st.buf);
+  st.buf = nullptr;
+  st.n = 0;
 }
 
 // ----------------------------------------------------------------------------
@@ -326,8 +370,8 @@ WorkloadResult run_workload(const WorkloadParams &params) {
   std::uniform_real_distribution<double> dist(0.0, 1.0);
 
   const size_t fsize = (params.file_size > 0) ? params.file_size : IO_FILE_SIZE;
-  IoState io_state = open_io_file(params.tmp_dir, params.io_mode,
-                                  params.queue_depth, fsize);
+  IoState io_state =
+      open_io_file(params.tmp_dir, params.io_mode, params.queue_depth, fsize);
   if (io_state.fd < 0)
     fprintf(stderr, "[worker] open_io_file failed for dir %s\n",
             params.tmp_dir.c_str());
@@ -335,9 +379,10 @@ WorkloadResult run_workload(const WorkloadParams &params) {
   MemState mem_state = open_mem_buf();
 
   WorkloadResult res{};
-  const auto start           = std::chrono::steady_clock::now();
+  const auto start = std::chrono::steady_clock::now();
   const auto warmup_deadline = start + std::chrono::seconds(params.warmup_secs);
-  const auto deadline        = warmup_deadline + std::chrono::seconds(params.duration_secs);
+  const auto deadline =
+      warmup_deadline + std::chrono::seconds(params.duration_secs);
 
   auto measure_start = start;
   bool in_warmup = (params.warmup_secs > 0);
@@ -369,14 +414,18 @@ WorkloadResult run_workload(const WorkloadParams &params) {
           int in_flight = 0;
           int free_slots[1024];
           int free_count = io_state.queue_depth;
-          for (int i = 0; i < io_state.queue_depth; ++i) free_slots[i] = i;
+          for (int i = 0; i < io_state.queue_depth; ++i)
+            free_slots[i] = i;
 
           while (std::chrono::steady_clock::now() < tick_end || in_flight > 0) {
             bool tick_active = (std::chrono::steady_clock::now() < tick_end);
             while (tick_active && free_count > 0) {
               int slot = free_slots[--free_count];
               struct io_uring_sqe *sqe = io_uring_get_sqe(&io_state.ring);
-              if (!sqe) { free_slots[free_count++] = slot; break; }
+              if (!sqe) {
+                free_slots[free_count++] = slot;
+                break;
+              }
 
               const off_t offset =
                   (off_t)((rng() % io_state.num_blocks) * IO_BUF_SIZE);
@@ -396,12 +445,15 @@ WorkloadResult run_workload(const WorkloadParams &params) {
               ++in_flight;
             }
 
-            if (in_flight > 0) io_uring_submit(&io_state.ring);
+            if (in_flight > 0)
+              io_uring_submit(&io_state.ring);
 
-            bool must_wait = (free_count == 0 || (!tick_active && in_flight > 0));
+            bool must_wait =
+                (free_count == 0 || (!tick_active && in_flight > 0));
             struct io_uring_cqe *cqe = nullptr;
             if (must_wait) {
-              if (io_uring_wait_cqe(&io_state.ring, &cqe) < 0) continue;
+              if (io_uring_wait_cqe(&io_state.ring, &cqe) < 0)
+                continue;
             } else {
               io_uring_peek_cqe(&io_state.ring, &cqe);
             }
@@ -410,7 +462,8 @@ WorkloadResult run_workload(const WorkloadParams &params) {
               int slot = static_cast<int>(
                   reinterpret_cast<uintptr_t>(io_uring_cqe_get_data(cqe)));
               if (cqe->res < 0) {
-                fprintf(stderr, "io_uring op failed: %s\n", strerror(-cqe->res));
+                fprintf(stderr, "io_uring op failed: %s\n",
+                        strerror(-cqe->res));
                 abort();
               } else if (static_cast<size_t>(cqe->res) != IO_BUF_SIZE) {
                 fprintf(stderr, "io_uring short r/w: %d bytes (expected %zu)\n",
@@ -469,11 +522,12 @@ WorkloadResult run_workload(const WorkloadParams &params) {
   close_mem_buf(mem_state);
 
   const auto finish = std::chrono::steady_clock::now();
-  res.elapsed_secs    = std::chrono::duration<double>(finish - measure_start).count();
-  res.throughput      = (res.cpu_ops + res.io_ops + res.mem_ops) / res.elapsed_secs;
-  res.cpu_throughput  = res.cpu_ops  / res.elapsed_secs;
-  res.io_throughput   = res.io_ops   / res.elapsed_secs;
-  res.mem_throughput  = res.mem_ops  / res.elapsed_secs;
+  res.elapsed_secs =
+      std::chrono::duration<double>(finish - measure_start).count();
+  res.throughput = (res.cpu_ops + res.io_ops + res.mem_ops) / res.elapsed_secs;
+  res.cpu_throughput = res.cpu_ops / res.elapsed_secs;
+  res.io_throughput = res.io_ops / res.elapsed_secs;
+  res.mem_throughput = res.mem_ops / res.elapsed_secs;
   return res;
 }
 
@@ -482,46 +536,62 @@ WorkloadResult run_workload(const WorkloadParams &params) {
 // Not dispatched by run_workload() under any current io_mode string.
 // ============================================================================
 
-// RMW: pread 4 KiB, mutate sector words, pwrite back to same offset (RW_balanced).
+// RMW: pread 4 KiB, mutate sector words, pwrite back to same offset
+// (RW_balanced).
 void do_io_work(IoState &st, std::mt19937_64 &rng) {
-  if (st.fd < 0 || !st.buf) return;
+  if (st.fd < 0 || !st.buf)
+    return;
   const off_t offset = (off_t)((rng() % st.num_blocks) * IO_BUF_SIZE);
   ssize_t r = pread(st.fd, st.buf, IO_BUF_SIZE, offset);
-  if (r != (ssize_t)IO_BUF_SIZE) { perror("pread (RW_balanced)"); abort(); }
+  if (r != (ssize_t)IO_BUF_SIZE) {
+    perror("pread (RW_balanced)");
+    abort();
+  }
   uint64_t *p = static_cast<uint64_t *>(st.buf);
   for (int i = 0; i < 8; ++i)
     p[i * (512 / sizeof(uint64_t))] = rng();
   ssize_t w = pwrite(st.fd, st.buf, IO_BUF_SIZE, offset);
-  if (w != (ssize_t)IO_BUF_SIZE) { perror("pwrite (RW_balanced)"); abort(); }
+  if (w != (ssize_t)IO_BUF_SIZE) {
+    perror("pwrite (RW_balanced)");
+    abort();
+  }
 }
 
 // 4 KiB pure random write (legacy rand_write name).
 void do_io_write_work(IoState &st, std::mt19937_64 &rng) {
-  if (st.fd < 0 || !st.buf) return;
+  if (st.fd < 0 || !st.buf)
+    return;
   uint64_t *p = static_cast<uint64_t *>(st.buf);
   for (int i = 0; i < 8; ++i)
     p[i * (512 / sizeof(uint64_t))] = rng();
   const off_t offset = (off_t)((rng() % st.num_blocks) * IO_BUF_SIZE);
   ssize_t ret = pwrite(st.fd, st.buf, IO_BUF_SIZE, offset);
-  if (ret != (ssize_t)IO_BUF_SIZE) { perror("pwrite"); abort(); }
+  if (ret != (ssize_t)IO_BUF_SIZE) {
+    perror("pwrite");
+    abort();
+  }
 }
 
 // 4 KiB pure random read (legacy rand_read name).
 void do_io_read_work(IoState &st, std::mt19937_64 &rng) {
-  if (st.fd < 0 || !st.buf) return;
+  if (st.fd < 0 || !st.buf)
+    return;
   const off_t offset = (off_t)((rng() % st.num_blocks) * IO_BUF_SIZE);
   [[maybe_unused]] ssize_t n = pread(st.fd, st.buf, IO_BUF_SIZE, offset);
 }
 
 // 50/50 random read or RMW write (rand_rw).
 void do_io_rw_work(IoState &st, std::mt19937_64 &rng) {
-  if (rng() % 2 == 0) do_io_read_work(st, rng);
-  else                 do_io_work(st, rng);
+  if (rng() % 2 == 0)
+    do_io_read_work(st, rng);
+  else
+    do_io_work(st, rng);
 }
 
 // 4 random reads + 1 random write (R_heavy).
 void do_io_r_heavy_work(IoState &st, std::mt19937_64 &rng) {
-  for (int i = 0; i < 4; ++i) do_io_read_work(st, rng);
+  for (int i = 0; i < 4; ++i)
+    do_io_read_work(st, rng);
   do_io_write_work(st, rng);
 }
 
@@ -529,27 +599,34 @@ void do_io_r_heavy_work(IoState &st, std::mt19937_64 &rng) {
 void do_io_w_heavy_work(IoState &st, std::mt19937_64 &rng) {
   do_io_read_work(st, rng);
   do_io_write_work(st, rng);
-  if (st.fd >= 0) fdatasync(st.fd);
+  if (st.fd >= 0)
+    fdatasync(st.fd);
 }
 
 // 50/50 random read or random write (rw_mixed).
 void do_io_rw_mixed_work(IoState &st, std::mt19937_64 &rng) {
-  if (rng() % 2 == 0) do_io_read_work(st, rng);
-  else                 do_io_write_work(st, rng);
+  if (rng() % 2 == 0)
+    do_io_read_work(st, rng);
+  else
+    do_io_write_work(st, rng);
 }
 
 // 64 KiB O_DIRECT read from a random 64 KiB-aligned offset (rand_read_64k).
 void do_io_read_64k_work(IoState &st, std::mt19937_64 &rng) {
-  if (st.fd < 0 || !st.buf_64k || st.num_blocks_64k == 0) return;
+  if (st.fd < 0 || !st.buf_64k || st.num_blocks_64k == 0)
+    return;
   const off_t offset = (off_t)((rng() % st.num_blocks_64k) * BUF_64K_SIZE);
   [[maybe_unused]] ssize_t n = pread(st.fd, st.buf_64k, BUF_64K_SIZE, offset);
 }
 
-// 1 MiB O_DIRECT sequential read; cursor advances by SEQ_BUF_SIZE (seq_read legacy).
+// 1 MiB O_DIRECT sequential read; cursor advances by SEQ_BUF_SIZE (seq_read
+// legacy).
 void do_io_seq_read_work(IoState &st) {
-  if (st.fd < 0 || !st.seq_buf) return;
+  if (st.fd < 0 || !st.seq_buf)
+    return;
   const off_t offset = (off_t)st.seq_cursor;
   [[maybe_unused]] ssize_t n = pread(st.fd, st.seq_buf, SEQ_BUF_SIZE, offset);
   st.seq_cursor += SEQ_BUF_SIZE;
-  if (st.seq_cursor + SEQ_BUF_SIZE > st.file_size) st.seq_cursor = 0;
+  if (st.seq_cursor + SEQ_BUF_SIZE > st.file_size)
+    st.seq_cursor = 0;
 }
