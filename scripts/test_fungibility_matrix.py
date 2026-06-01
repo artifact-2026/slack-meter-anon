@@ -147,8 +147,8 @@ def clean_scratch_files():
 def main():
     parser = argparse.ArgumentParser(description="Test I/O Fungibility Matrix with mixed background at varying intensities.")
     parser.add_argument("--bg-procs", type=int, default=8)
-    parser.add_argument("--bg-io-mix", type=float, default=0.3)
-    parser.add_argument("--bg-mem-mix", type=float, default=0.3)
+    parser.add_argument("--bg-io-mix", type=float, default=1.0)
+    parser.add_argument("--bg-mem-mix", type=float, default=0.0)
     parser.add_argument("--bg-intensities", type=str, default="0.2,0.4,0.6,0.8",
                         help="comma-separated list of background I/O intensities to sweep (default: 0.2,0.4,0.6,0.8)")
     parser.add_argument("--duration", type=int, default=60)
