@@ -10,9 +10,6 @@
 #include <thread>
 #include <unistd.h>
 
-#ifdef HAS_URING
-#include <liburing.h>
-#endif
 
 #ifdef __APPLE__
 #define fdatasync(fd) fsync(fd)
@@ -170,33 +167,8 @@ IoState open_io_file(const std::string &tmp_dir, const std::string &io_mode,
     for (size_t i = 0; i < SEQ_BUF_SIZE / sizeof(uint64_t); ++i)
       p[i] = init_rng();
   }
-
-#ifdef HAS_URING
-  st.queue_depth = queue_depth > 1024 ? 1024 : queue_depth;
-  if (st.queue_depth > 1) {
-    if (io_uring_queue_init(st.queue_depth, &st.ring, 0) == 0) {
-      st.use_uring = true;
-      st.ring_bufs =
-          static_cast<void **>(calloc(st.queue_depth, sizeof(void *)));
-      if (st.ring_bufs) {
-        for (int i = 0; i < st.queue_depth; ++i) {
-          if (posix_memalign(&st.ring_bufs[i], IO_BUF_SIZE, IO_BUF_SIZE) != 0)
-            st.ring_bufs[i] = nullptr;
-          else if (io_mode == "rand_write" || io_mode == "seq_write") {
-            // Pre-fill write buffers with non-zero data.
-            std::mt19937_64 rng(1337 + id + i);
-            uint64_t *p = static_cast<uint64_t *>(st.ring_bufs[i]);
-            for (size_t j = 0; j < IO_BUF_SIZE / sizeof(uint64_t); ++j)
-              p[j] = rng();
-          }
-        }
-      }
-    }
-  }
-#else
   (void)io_mode;
   (void)queue_depth;
-#endif
 
   return st;
 }
@@ -228,19 +200,6 @@ void close_io_file(IoState &st) {
       unlink(st.path.c_str());
     st.path.clear();
   }
-#ifdef HAS_URING
-  if (st.use_uring) {
-    io_uring_queue_exit(&st.ring);
-    st.use_uring = false;
-  }
-  if (st.ring_bufs) {
-    for (int i = 0; i < st.queue_depth; ++i)
-      if (st.ring_bufs[i])
-        free(st.ring_bufs[i]);
-    free(st.ring_bufs);
-    st.ring_bufs = nullptr;
-  }
-#endif
 }
 
 // ----------------------------------------------------------------------------
@@ -405,96 +364,21 @@ WorkloadResult run_workload(const WorkloadParams &params) {
       const double n = dist(rng);
       if (n < params.io_mix) {
         // ---- I/O phase ------------------------------------------------------
-#ifdef HAS_URING
-        // Use io_uring for rand_read and rand_write only.
-        // Sequential variants manage a cursor that doesn't map naturally to the
-        // async submit-poll loop, so they always use the synchronous path.
-        if (io_state.use_uring &&
-            (params.io_mode == "rand_write" || params.io_mode == "rand_read")) {
-          int in_flight = 0;
-          int free_slots[1024];
-          int free_count = io_state.queue_depth;
-          for (int i = 0; i < io_state.queue_depth; ++i)
-            free_slots[i] = i;
-
-          while (std::chrono::steady_clock::now() < tick_end || in_flight > 0) {
-            bool tick_active = (std::chrono::steady_clock::now() < tick_end);
-            while (tick_active && free_count > 0) {
-              int slot = free_slots[--free_count];
-              struct io_uring_sqe *sqe = io_uring_get_sqe(&io_state.ring);
-              if (!sqe) {
-                free_slots[free_count++] = slot;
-                break;
-              }
-
-              const off_t offset =
-                  (off_t)((rng() % io_state.num_blocks) * IO_BUF_SIZE);
-              void *buf = io_state.ring_bufs[slot];
-
-              if (params.io_mode == "rand_write") {
-                uint64_t *p = static_cast<uint64_t *>(buf);
-                for (int i = 0; i < 8; ++i)
-                  p[i * (512 / sizeof(uint64_t))] = rng();
-                io_uring_prep_write(sqe, io_state.fd, buf, IO_BUF_SIZE, offset);
-              } else {
-                io_uring_prep_read(sqe, io_state.fd, buf, IO_BUF_SIZE, offset);
-              }
-
-              io_uring_sqe_set_data(
-                  sqe, reinterpret_cast<void *>(static_cast<uintptr_t>(slot)));
-              ++in_flight;
-            }
-
-            if (in_flight > 0)
-              io_uring_submit(&io_state.ring);
-
-            bool must_wait =
-                (free_count == 0 || (!tick_active && in_flight > 0));
-            struct io_uring_cqe *cqe = nullptr;
-            if (must_wait) {
-              if (io_uring_wait_cqe(&io_state.ring, &cqe) < 0)
-                continue;
-            } else {
-              io_uring_peek_cqe(&io_state.ring, &cqe);
-            }
-
-            while (cqe) {
-              int slot = static_cast<int>(
-                  reinterpret_cast<uintptr_t>(io_uring_cqe_get_data(cqe)));
-              if (cqe->res < 0) {
-                fprintf(stderr, "io_uring op failed: %s\n",
-                        strerror(-cqe->res));
-                abort();
-              } else if (static_cast<size_t>(cqe->res) != IO_BUF_SIZE) {
-                fprintf(stderr, "io_uring short r/w: %d bytes (expected %zu)\n",
-                        cqe->res, IO_BUF_SIZE);
-                abort();
-              }
-              free_slots[free_count++] = slot;
-              --in_flight;
-              ++res.io_ops;
-              io_uring_cqe_seen(&io_state.ring, cqe);
-              cqe = nullptr;
-              io_uring_peek_cqe(&io_state.ring, &cqe);
-            }
+        // Synchronous path — all four I/O modes.
+        while (std::chrono::steady_clock::now() < tick_end) {
+          if (params.io_mode == "rand_read") {
+            do_io_work_4k_rand_read(io_state, rng);
+          } else if (params.io_mode == "seq_write") {
+            do_io_work_4k_seq_write(io_state, rng);
+          } else if (params.io_mode == "seq_read") {
+            do_io_work_4k_seq_read(io_state);
+          } else if (params.io_mode == "rw_mixed") {
+            do_io_rw_mixed_work(io_state, rng);
+          } else {
+            // default: rand_write
+            do_io_work_4k_rand_write(io_state, rng);
           }
-        } else
-#endif
-        {
-          // Synchronous path — all four I/O modes.
-          while (std::chrono::steady_clock::now() < tick_end) {
-            if (params.io_mode == "rand_read") {
-              do_io_work_4k_rand_read(io_state, rng);
-            } else if (params.io_mode == "seq_write") {
-              do_io_work_4k_seq_write(io_state, rng);
-            } else if (params.io_mode == "seq_read") {
-              do_io_work_4k_seq_read(io_state);
-            } else {
-              // default: rand_write
-              do_io_work_4k_rand_write(io_state, rng);
-            }
-            ++res.io_ops;
-          }
+          ++res.io_ops;
         }
 
       } else if (n < params.io_mix + params.mem_mix) {

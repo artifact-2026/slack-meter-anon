@@ -16,15 +16,6 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 add_library(workload STATIC src/workload.cpp)
 target_include_directories(workload PUBLIC src)
 
-# Check for liburing (needed for io_uring support on Linux)
-find_library(URING_LIB uring)
-if(URING_LIB)
-  target_compile_definitions(workload PUBLIC HAS_URING)
-  target_link_libraries(workload PUBLIC uring)
-  message(STATUS "Found liburing: ${URING_LIB}, enabling io_uring support")
-else()
-  message(STATUS "liburing not found, falling back to synchronous I/O")
-endif()
 
 # ── worker binary ─────────────────────────────────────────────────────────────
 add_executable(worker src/worker_main.cpp)

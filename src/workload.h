@@ -4,9 +4,7 @@
 #include <random>
 #include <string>
 
-#ifdef HAS_URING
-#include <liburing.h>
-#endif
+
 
 // ----------------------------------------------------------------------------
 // WorkloadParams
@@ -75,12 +73,7 @@ struct IoState {
   size_t num_blocks_64k = 0; // file_size / BUF_64K_SIZE
   void *seq_buf = nullptr;   // posix_memalign'd, 1 MiB  (seq_read legacy)
 
-#ifdef HAS_URING
-  bool use_uring = false;
-  struct io_uring ring;
-  int queue_depth = 1;
-  void **ring_bufs = nullptr;
-#endif
+
 };
 
 // Open (or create) the per-worker scratch file and return an initialised
