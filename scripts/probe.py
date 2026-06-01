@@ -235,13 +235,13 @@ def sweep(
         bt, _ = run_probe(n_probe_full=0, **kw)
         baseline_runs.append(bt)
         if n_baseline > 1:
-            print(f"  baseline sample {i+1}/{n_baseline}: {bt*_KT:,.3f} kTokens/s")
+            print(f"  baseline sample {i+1}/{n_baseline}: {bt:,.0f} Tokens/s")
 
     baseline_tput = statistics.mean(baseline_runs)   # B
     if n_baseline > 1:
-        print(f"  Baseline B : {baseline_tput*_KT:,.3f} kTokens/s (mean of {n_baseline})")
+        print(f"  Baseline B : {baseline_tput:,.0f} Tokens/s (mean of {n_baseline})")
     else:
-        print(f"  Baseline B : {baseline_tput*_KT:,.3f} kTokens/s")
+        print(f"  Baseline B : {baseline_tput:,.0f} Tokens/s")
 
     # ------------------------------------------------------------------
     # Phase 1: sweep probe workers until probe throughput plateaus
@@ -251,7 +251,7 @@ def sweep(
     #   stop after MAX_STAGNATION consecutive steps without improvement
     # ------------------------------------------------------------------
     print(f"\n--- Phase 1: Linear {probe_type.upper()} sweep (stop on probe plateau) ---")
-    print(f"  {'Probes':>7}  {'bg (kT/s)':>12}  {probe_type.upper()+' (kT/s)':>12}")
+    print(f"  {'Probes':>7}  {'bg (T/s)':>12}  {probe_type.upper()+' (T/s)':>12}")
     print(f"  {'-------':>7}  {'---------':>12}  {'---------':>12}")
 
     phase1: list[dict] = []
@@ -266,10 +266,10 @@ def sweep(
         bg_tput, probe_tput = run_probe(n_probe_full=n_probe, **kw)
         probe_kt = probe_tput * _KT
         bg_kt    = bg_tput    * _KT
-        print(f"  {n_probe:>7d}  {bg_kt:>12.3f}  {probe_kt:>12.3f}")
+        print(f"  {n_probe:>7d}  {bg_tput:>12.0f}  {probe_tput:>12.0f}")
         phase1.append(dict(n_probe=n_probe, bg_ktokens=bg_kt, probe_ktokens=probe_kt))
 
-        min_gain = (running_max / peak_n * 0.02) if running_max > 0 else 0.0
+        min_gain = (running_max * 0.01) if running_max > 0 else 0.0
         if probe_tput > running_max + min_gain:
             running_max         = probe_tput
             peak_n              = n_probe
@@ -280,12 +280,12 @@ def sweep(
             steps_since_improve += 1
 
         if steps_since_improve >= MAX_STAGNATION:
-            print(f"\n  Probe throughput plateaued. S = {slack_ktokens:.3f} kTokens/s")
+            print(f"\n  Probe throughput plateaued. S = {slack_ktokens*1000:.0f} Tokens/s")
             break
 
         n_probe += 1
     else:
-        print(f"\n  Reached max_probes={max_probes}. S = {slack_ktokens:.3f} kTokens/s")
+        print(f"\n  Reached max_probes={max_probes}. S = {slack_ktokens*1000:.0f} Tokens/s")
 
     # ------------------------------------------------------------------
     # Resource usage (requires C)
@@ -389,7 +389,7 @@ Examples:
           f"io={args.bg_io_mix}  mem={args.bg_mem_mix}  intensity={args.bg_intensity}")
     print(f"  Probe dur  : {args.duration}s   file_size={args.file_size_mib} MiB")
     if args.capacity:
-        print(f"  Capacity C : {args.capacity:.3f} kTokens/s")
+        print(f"  Capacity C : {args.capacity*1000:.0f} Tokens/s")
     print(f"  Tmp dir    : {args.tmp_dir}")
     print("=" * 60)
 
@@ -421,11 +421,11 @@ Examples:
     print("\n" + "=" * 60)
     print("  Result")
     print("=" * 60)
-    print(f"  Baseline B          : {result['baseline_bg_ktokens']:.3f} kTokens/s")
-    print(f"  Slack S             : {result['slack_ktokens']:.3f} kTokens/s")
-    print(f"  Baseline R (at S)   : {result['baseline_r_ktokens']:.3f} kTokens/s")
+    print(f"  Baseline B          : {result['baseline_bg_ktokens']*1000:.0f} Tokens/s")
+    print(f"  Slack S             : {result['slack_ktokens']*1000:.0f} Tokens/s")
+    print(f"  Baseline R (at S)   : {result['baseline_r_ktokens']*1000:.0f} Tokens/s")
     if result.get("capacity_ktokens") is not None:
-        print(f"  Capacity C          : {result['capacity_ktokens']:.3f} kTokens/s")
+        print(f"  Capacity C          : {result['capacity_ktokens']*1000:.0f} Tokens/s")
     if result.get("resource_usage_pct") is not None:
         print(f"  Resource usage      : {result['resource_usage_pct']:.1f}%")
     print("=" * 60)
