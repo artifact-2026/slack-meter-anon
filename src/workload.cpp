@@ -241,9 +241,76 @@ void do_io_work_4k_rand_read(IoState &st, std::mt19937_64 &rng) {
   [[maybe_unused]] ssize_t n = pread(st.fd, st.buf, IO_BUF_SIZE, offset);
 }
 
-// pwrite 32 KiB at seq_cursor; advance cursor by SEQ_IO_BUF_SIZE, wrap at file_size.
+// pwrite 32 KiB to a random aligned offset (rand_write_32k).
+// Mutates sector words before writing (same dedup-defeat as rand_write).
+void do_io_work_32k_rand_write(IoState &st, std::mt19937_64 &rng) {
+  if (st.fd < 0 || !st.buf)
+    return;
+  uint64_t *p = static_cast<uint64_t *>(st.buf);
+  for (int i = 0; i < 64; ++i)
+    p[i * (512 / sizeof(uint64_t))] = rng();
+  const size_t num_blocks_32k = st.file_size / SEQ_IO_BUF_SIZE;
+  if (num_blocks_32k == 0)
+    return;
+  const off_t offset = (off_t)((rng() % num_blocks_32k) * SEQ_IO_BUF_SIZE);
+  ssize_t ret = pwrite(st.fd, st.buf, SEQ_IO_BUF_SIZE, offset);
+  if (ret != (ssize_t)SEQ_IO_BUF_SIZE) {
+    perror("pwrite rand_write_32k");
+    abort();
+  }
+
+  // Read target sleep padding from environment
+  static const char *pad_env = getenv("WRITE_PAD_NS");
+  static const long long pad_ns = pad_env ? std::atoll(pad_env) : 0;
+  if (pad_ns > 0) {
+    std::this_thread::sleep_for(std::chrono::nanoseconds(pad_ns));
+  }
+}
+
+// pread 32 KiB from a random aligned offset (rand_read_32k).
+void do_io_work_32k_rand_read(IoState &st, std::mt19937_64 &rng) {
+  if (st.fd < 0 || !st.buf)
+    return;
+  const size_t num_blocks_32k = st.file_size / SEQ_IO_BUF_SIZE;
+  if (num_blocks_32k == 0)
+    return;
+  const off_t offset = (off_t)((rng() % num_blocks_32k) * SEQ_IO_BUF_SIZE);
+  [[maybe_unused]] ssize_t n = pread(st.fd, st.buf, SEQ_IO_BUF_SIZE, offset);
+}
+
+// pwrite 4 KiB at seq_cursor; advance cursor by IO_BUF_SIZE, wrap at file_size.
 // Mutates sector words before writing (same dedup-defeat as rand_write).
 void do_io_work_4k_seq_write(IoState &st, std::mt19937_64 &rng) {
+  if (st.fd < 0 || !st.buf)
+    return;
+  uint64_t *p = static_cast<uint64_t *>(st.buf);
+  for (int i = 0; i < 8; ++i)
+    p[i * (512 / sizeof(uint64_t))] = rng();
+  const off_t offset = (off_t)st.seq_cursor;
+  ssize_t ret = pwrite(st.fd, st.buf, IO_BUF_SIZE, offset);
+  if (ret != (ssize_t)IO_BUF_SIZE) {
+    perror("pwrite seq_write_4k");
+    abort();
+  }
+  st.seq_cursor += IO_BUF_SIZE;
+  if (st.seq_cursor >= st.file_size)
+    st.seq_cursor = 0;
+}
+
+// pread 4 KiB at seq_cursor; advance cursor by IO_BUF_SIZE, wrap at file_size.
+void do_io_work_4k_seq_read(IoState &st) {
+  if (st.fd < 0 || !st.buf)
+    return;
+  const off_t offset = (off_t)st.seq_cursor;
+  [[maybe_unused]] ssize_t n = pread(st.fd, st.buf, IO_BUF_SIZE, offset);
+  st.seq_cursor += IO_BUF_SIZE;
+  if (st.seq_cursor >= st.file_size)
+    st.seq_cursor = 0;
+}
+
+// pwrite 32 KiB at seq_cursor; advance cursor by SEQ_IO_BUF_SIZE, wrap at file_size.
+// Mutates sector words before writing (same dedup-defeat as rand_write).
+void do_io_work_32k_seq_write(IoState &st, std::mt19937_64 &rng) {
   if (st.fd < 0 || !st.buf)
     return;
   uint64_t *p = static_cast<uint64_t *>(st.buf);
@@ -252,7 +319,7 @@ void do_io_work_4k_seq_write(IoState &st, std::mt19937_64 &rng) {
   const off_t offset = (off_t)st.seq_cursor;
   ssize_t ret = pwrite(st.fd, st.buf, SEQ_IO_BUF_SIZE, offset);
   if (ret != (ssize_t)SEQ_IO_BUF_SIZE) {
-    perror("pwrite seq_write");
+    perror("pwrite seq_write_32k");
     abort();
   }
   st.seq_cursor += SEQ_IO_BUF_SIZE;
@@ -261,7 +328,7 @@ void do_io_work_4k_seq_write(IoState &st, std::mt19937_64 &rng) {
 }
 
 // pread 32 KiB at seq_cursor; advance cursor by SEQ_IO_BUF_SIZE, wrap at file_size.
-void do_io_work_4k_seq_read(IoState &st) {
+void do_io_work_32k_seq_read(IoState &st) {
   if (st.fd < 0 || !st.buf)
     return;
   const off_t offset = (off_t)st.seq_cursor;
@@ -371,10 +438,20 @@ WorkloadResult run_workload(const WorkloadParams &params) {
         while (std::chrono::steady_clock::now() < tick_end) {
           if (params.io_mode == "rand_read") {
             do_io_work_4k_rand_read(io_state, rng);
-          } else if (params.io_mode == "seq_write") {
+          } else if (params.io_mode == "rand_read_32k") {
+            do_io_work_32k_rand_read(io_state, rng);
+          } else if (params.io_mode == "rand_write") {
+            do_io_work_4k_rand_write(io_state, rng);
+          } else if (params.io_mode == "rand_write_32k") {
+            do_io_work_32k_rand_write(io_state, rng);
+          } else if (params.io_mode == "seq_write_4k") {
             do_io_work_4k_seq_write(io_state, rng);
-          } else if (params.io_mode == "seq_read") {
+          } else if (params.io_mode == "seq_write") {
+            do_io_work_32k_seq_write(io_state, rng);
+          } else if (params.io_mode == "seq_read_4k") {
             do_io_work_4k_seq_read(io_state);
+          } else if (params.io_mode == "seq_read") {
+            do_io_work_32k_seq_read(io_state);
           } else if (params.io_mode == "rw_mixed") {
             do_io_rw_mixed_work(io_state, rng);
           } else {

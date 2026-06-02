@@ -84,21 +84,29 @@ IoState open_io_file(const std::string &tmp_dir, const std::string &io_mode,
                      int queue_depth, size_t file_size = IO_FILE_SIZE);
 
 // ----------------------------------------------------------------------------
-// Four fungible 4 KiB I/O operations.
+// Fungible 4 KiB and 32 KiB I/O operations.
 //
-//   do_io_work_4k_rand_write  – pwrite 4 KiB to a random aligned offset
-//   do_io_work_4k_rand_read   – pread  4 KiB from a random aligned offset
-//   do_io_work_4k_seq_write   – pwrite 4 KiB at seq_cursor; advance cursor
-//   do_io_work_4k_seq_read    – pread  4 KiB at seq_cursor; advance cursor
+//   do_io_work_4k_rand_write   – pwrite 4 KiB to a random aligned offset
+//   do_io_work_4k_rand_read    – pread  4 KiB from a random aligned offset
+//   do_io_work_32k_rand_write  – pwrite 32 KiB to a random aligned offset
+//   do_io_work_32k_rand_read   – pread  32 KiB from a random aligned offset
+//   do_io_work_4k_seq_write    – pwrite 4 KiB at seq_cursor; advance cursor
+//   do_io_work_4k_seq_read     – pread  4 KiB at seq_cursor; advance cursor
+//   do_io_work_32k_seq_write   – pwrite 32 KiB at seq_cursor; advance cursor
+//   do_io_work_32k_seq_read    – pread  32 KiB at seq_cursor; advance cursor
 //
-// All four use O_DIRECT so operations bypass the page cache and reach the
+// All use O_DIRECT so operations bypass the page cache and reach the
 // storage stack directly.  No fsync — durability is outside the scope of
 // throughput measurement.
 // ----------------------------------------------------------------------------
-void do_io_work_4k_rand_write(IoState &st, std::mt19937_64 &rng);
-void do_io_work_4k_rand_read (IoState &st, std::mt19937_64 &rng);
-void do_io_work_4k_seq_write (IoState &st, std::mt19937_64 &rng);
-void do_io_work_4k_seq_read  (IoState &st);
+void do_io_work_4k_rand_write (IoState &st, std::mt19937_64 &rng);
+void do_io_work_4k_rand_read  (IoState &st, std::mt19937_64 &rng);
+void do_io_work_32k_rand_write(IoState &st, std::mt19937_64 &rng);
+void do_io_work_32k_rand_read (IoState &st, std::mt19937_64 &rng);
+void do_io_work_4k_seq_write  (IoState &st, std::mt19937_64 &rng);
+void do_io_work_4k_seq_read   (IoState &st);
+void do_io_work_32k_seq_write (IoState &st, std::mt19937_64 &rng);
+void do_io_work_32k_seq_read  (IoState &st);
 
 // Close fd, free the aligned buffer, and unlink the scratch file.
 void close_io_file(IoState &state);
