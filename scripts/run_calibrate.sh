@@ -57,18 +57,17 @@ else
     DEFAULT_OUT="$REPO/results/calibration/cap_${IO_MODE}.json"
 fi
 
+OUTPUT_ARG=()
 if [[ "$*" != *"--output"* ]]; then
     mkdir -p "$(dirname "$DEFAULT_OUT")"
     log "No --output given; defaulting to $DEFAULT_OUT"
-    OUTPUT_ARG="--output $DEFAULT_OUT"
-else
-    OUTPUT_ARG=""
+    OUTPUT_ARG=("--output" "$DEFAULT_OUT")
 fi
 
 STEP="${STEP:-1}"
-START_N_ARG=""
+START_N_ARG=()
 if [[ -n "${START_N:-}" ]]; then
-    START_N_ARG="--start-n ${START_N}"
+    START_N_ARG=("--start-n" "${START_N}")
 fi
 
 MODE_VAL="$IO_MODE"
@@ -80,7 +79,6 @@ fi
 
 # ---------------------------------------------------------------------------
 log "Running ${RESOURCE_TYPE} saturation sweep (mode: ${MODE_VAL}, step: ${STEP}${START_N:+, start-n: ${START_N}}, qd: ${QUEUE_DEPTH})..."
-# shellcheck disable=SC2086
 python3 "$REPO/scripts/saturate.py" \
     --resource-type "$RESOURCE_TYPE" \
     --io-mode "$IO_MODE" \
@@ -89,6 +87,6 @@ python3 "$REPO/scripts/saturate.py" \
     --step "$STEP" \
     --queue-depth "$QUEUE_DEPTH" \
     --file-size-mib "$FILE_SIZE_MIB" \
-    $START_N_ARG \
-    $OUTPUT_ARG \
+    "${START_N_ARG[@]}" \
+    "${OUTPUT_ARG[@]}" \
     "$@"
