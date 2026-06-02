@@ -27,6 +27,9 @@ static constexpr int TICK_MS = 250;
 // Linux filesystems and NVMe devices.
 static constexpr size_t IO_BUF_SIZE = 4096;
 
+// Size of each sequential I/O operation (32 KiB).
+static constexpr size_t SEQ_IO_BUF_SIZE = 32768;
+
 // Iterations per CPU work unit.
 static constexpr int CPU_ITERS = 18'400;
 
@@ -98,13 +101,13 @@ IoState open_io_file(const std::string &tmp_dir, const std::string &io_mode,
       file_exists_and_ok = true;
   }
 
-  // 4 KiB aligned buffer — shared by all four I/O variants.
-  if (posix_memalign(&st.buf, IO_BUF_SIZE, IO_BUF_SIZE) != 0)
+  // Aligned buffer — shared by all four I/O variants (sized to 32 KiB to support seq ops).
+  if (posix_memalign(&st.buf, 4096, SEQ_IO_BUF_SIZE) != 0)
     return st;
 
   std::mt19937_64 init_rng(1337 + id);
   uint64_t *buf_ptr = static_cast<uint64_t *>(st.buf);
-  for (size_t i = 0; i < IO_BUF_SIZE / sizeof(uint64_t); ++i)
+  for (size_t i = 0; i < SEQ_IO_BUF_SIZE / sizeof(uint64_t); ++i)
     buf_ptr[i] = init_rng();
 
   if (file_exists_and_ok) {
@@ -238,32 +241,32 @@ void do_io_work_4k_rand_read(IoState &st, std::mt19937_64 &rng) {
   [[maybe_unused]] ssize_t n = pread(st.fd, st.buf, IO_BUF_SIZE, offset);
 }
 
-// pwrite 4 KiB at seq_cursor; advance cursor by IO_BUF_SIZE, wrap at file_size.
+// pwrite 32 KiB at seq_cursor; advance cursor by SEQ_IO_BUF_SIZE, wrap at file_size.
 // Mutates sector words before writing (same dedup-defeat as rand_write).
 void do_io_work_4k_seq_write(IoState &st, std::mt19937_64 &rng) {
   if (st.fd < 0 || !st.buf)
     return;
   uint64_t *p = static_cast<uint64_t *>(st.buf);
-  for (int i = 0; i < 8; ++i)
+  for (int i = 0; i < 64; ++i)
     p[i * (512 / sizeof(uint64_t))] = rng();
   const off_t offset = (off_t)st.seq_cursor;
-  ssize_t ret = pwrite(st.fd, st.buf, IO_BUF_SIZE, offset);
-  if (ret != (ssize_t)IO_BUF_SIZE) {
+  ssize_t ret = pwrite(st.fd, st.buf, SEQ_IO_BUF_SIZE, offset);
+  if (ret != (ssize_t)SEQ_IO_BUF_SIZE) {
     perror("pwrite seq_write");
     abort();
   }
-  st.seq_cursor += IO_BUF_SIZE;
+  st.seq_cursor += SEQ_IO_BUF_SIZE;
   if (st.seq_cursor >= st.file_size)
     st.seq_cursor = 0;
 }
 
-// pread 4 KiB at seq_cursor; advance cursor by IO_BUF_SIZE, wrap at file_size.
+// pread 32 KiB at seq_cursor; advance cursor by SEQ_IO_BUF_SIZE, wrap at file_size.
 void do_io_work_4k_seq_read(IoState &st) {
   if (st.fd < 0 || !st.buf)
     return;
   const off_t offset = (off_t)st.seq_cursor;
-  [[maybe_unused]] ssize_t n = pread(st.fd, st.buf, IO_BUF_SIZE, offset);
-  st.seq_cursor += IO_BUF_SIZE;
+  [[maybe_unused]] ssize_t n = pread(st.fd, st.buf, SEQ_IO_BUF_SIZE, offset);
+  st.seq_cursor += SEQ_IO_BUF_SIZE;
   if (st.seq_cursor >= st.file_size)
     st.seq_cursor = 0;
 }

@@ -74,16 +74,25 @@ services:
 
   calibrate:
     <<: *base
+    profiles:
+      - tools
     entrypoint: [ "bash", "/app/scripts/run_calibrate.sh" ]
 
   fungibility-io:
     <<: *base
+    profiles:
+      - tools
     entrypoint: [ "python3", "/app/scripts/test_fungibility_matrix.py" ]
 
   fungibility-cpu:
     <<: *base
+    profiles:
+      - tools
     entrypoint: [ "python3", "/app/scripts/test_fungibility_matrix_cpu.py" ]
 
   fungibility-mem:
     <<: *base
+    profiles:
+      - tools
     entrypoint: [ "python3", "/app/scripts/test_fungibility_matrix_mem.py" ]
+
