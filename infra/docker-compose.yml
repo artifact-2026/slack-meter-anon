@@ -50,6 +50,7 @@ x-base: &base
     MAX_PROCS: ${MAX_PROCS:-32}
     MIN_PROCS: ${MIN_PROCS:-10}
     IO_MIX: ${IO_MIX:-0.3}
+    MEM_MIX: ${MEM_MIX:-0.0}
     INTENSITY: ${INTENSITY:-0.75}
     IO_MODE: ${IO_MODE:-rand_write}
     DROP_PCT: ${DROP_PCT:-0.05}
