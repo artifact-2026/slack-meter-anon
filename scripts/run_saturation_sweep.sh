@@ -47,8 +47,8 @@ BUILD="$REPO/build"
 
 MODE="${MODE:-saturation}"
 DURATION="${DURATION:-60}"
-WARMUP="${WARMUP:-5}"
-MAX_PROCS="${MAX_PROCS:-32}"
+WARMUP="${WARMUP:-15}"
+MAX_PROCS="${MAX_PROCS:-300}"
 IO_MIX="${IO_MIX:-0.3}"
 MEM_MIX="${MEM_MIX:-0.0}"
 INTENSITY="${INTENSITY:-0.75}"
@@ -56,7 +56,11 @@ DROP_PCT="${DROP_PCT:-0.05}"
 SAMPLES="${SAMPLES:-3}"
 INTERFERENCE_COUNT="${INTERFERENCE_COUNT:-3}"
 BG_IO_MODE="${BG_IO_MODE:-${IO_MODE:-rand_write}}"
-PROBE_IO_MODE="${PROBE_IO_MODE:-${IO_MODE:-rand_write}}"
+if [[ -n "${PROBE_IO_MODE:-}" ]]; then
+    PROBE_IO_MODES=("$PROBE_IO_MODE")
+else
+    PROBE_IO_MODES=("rand_write" "rand_read" "seq_write" "seq_read")
+fi
 QUEUE_DEPTH="${QUEUE_DEPTH:-1}"
 BG_QUEUE_DEPTH="${BG_QUEUE_DEPTH:-$QUEUE_DEPTH}"
 PROBE_QUEUE_DEPTH="${PROBE_QUEUE_DEPTH:-$QUEUE_DEPTH}"
@@ -174,26 +178,51 @@ log "Saturation point: $BG_PROCS workers"
 
 run_probe() {
     local probe_type="$1"
-    log "Phase 2: probing $probe_type slack  bg_procs=$BG_PROCS  drop_pct=$DROP_PCT"
-    python3 "$REPO/scripts/probe.py" \
-        --probe-type    "$probe_type"          \
-        --bg-procs      "$BG_PROCS"            \
-        --bg-io-mix     "$IO_MIX"              \
-        --bg-mem-mix    "$MEM_MIX"             \
-        --bg-intensity  "$INTENSITY"           \
-        --duration      "$DURATION"            \
-        --warmup        "$WARMUP"              \
-        --drop-pct      "$DROP_PCT"            \
-        --samples       "$SAMPLES"             \
-        --interference-threshold-count "$INTERFERENCE_COUNT" \
-        --tmp-dir       "$TMP_DIR"             \
-        --worker-bin    "$BUILD/worker"        \
-        --bg-io-mode    "$BG_IO_MODE"          \
-        --probe-io-mode "$PROBE_IO_MODE"       \
-        --bg-queue-depth    "$BG_QUEUE_DEPTH"    \
-        --probe-queue-depth "$PROBE_QUEUE_DEPTH" \
-        --output "$OUTPUT_DIR/probe_${probe_type}.json" \
-        --plot   "$OUTPUT_DIR/probe_${probe_type}.png"
+    if [[ "$probe_type" == "io" ]]; then
+        for p_mode in "${PROBE_IO_MODES[@]}"; do
+            log "Phase 2: probing $probe_type slack ($p_mode)  bg_procs=$BG_PROCS  drop_pct=$DROP_PCT"
+            python3 "$REPO/scripts/probe.py" \
+                --probe-type    "$probe_type"          \
+                --bg-procs      "$BG_PROCS"            \
+                --bg-io-mix     "$IO_MIX"              \
+                --bg-mem-mix    "$MEM_MIX"             \
+                --bg-intensity  "$INTENSITY"           \
+                --duration      "$DURATION"            \
+                --warmup        "$WARMUP"              \
+                --drop-pct      "$DROP_PCT"            \
+                --samples       "$SAMPLES"             \
+                --interference-threshold-count "$INTERFERENCE_COUNT" \
+                --tmp-dir       "$TMP_DIR"             \
+                --worker-bin    "$BUILD/worker"        \
+                --bg-io-mode    "$BG_IO_MODE"          \
+                --probe-io-mode "$p_mode"              \
+                --bg-queue-depth    "$BG_QUEUE_DEPTH"    \
+                --probe-queue-depth "$PROBE_QUEUE_DEPTH" \
+                --output "$OUTPUT_DIR/probe_${probe_type}_${p_mode}.json" \
+                --plot   "$OUTPUT_DIR/probe_${probe_type}_${p_mode}.png"
+        done
+    else
+        log "Phase 2: probing $probe_type slack  bg_procs=$BG_PROCS  drop_pct=$DROP_PCT"
+        python3 "$REPO/scripts/probe.py" \
+            --probe-type    "$probe_type"          \
+            --bg-procs      "$BG_PROCS"            \
+            --bg-io-mix     "$IO_MIX"              \
+            --bg-mem-mix    "$MEM_MIX"             \
+            --bg-intensity  "$INTENSITY"           \
+            --duration      "$DURATION"            \
+            --warmup        "$WARMUP"              \
+            --drop-pct      "$DROP_PCT"            \
+            --samples       "$SAMPLES"             \
+            --interference-threshold-count "$INTERFERENCE_COUNT" \
+            --tmp-dir       "$TMP_DIR"             \
+            --worker-bin    "$BUILD/worker"        \
+            --bg-io-mode    "$BG_IO_MODE"          \
+            --probe-io-mode "${PROBE_IO_MODES[0]}" \
+            --bg-queue-depth    "$BG_QUEUE_DEPTH"    \
+            --probe-queue-depth "$PROBE_QUEUE_DEPTH" \
+            --output "$OUTPUT_DIR/probe_${probe_type}.json" \
+            --plot   "$OUTPUT_DIR/probe_${probe_type}.png"
+    fi
 }
 
 case "$MODE" in
@@ -247,7 +276,11 @@ case "$MODE" in
     slack-cpu|full) log "  CPU probe result  : $OUTPUT_DIR/probe_cpu.json" ;;
 esac
 case "$MODE" in
-    slack-io|full)  log "  IO probe result   : $OUTPUT_DIR/probe_io.json" ;;
+    slack-io|full)
+        for p_mode in "${PROBE_IO_MODES[@]}"; do
+            log "  IO probe result ($p_mode) : $OUTPUT_DIR/probe_io_${p_mode}.json"
+        done
+        ;;
 esac
 case "$MODE" in
     slack-mem|full) log "  Memory probe result: $OUTPUT_DIR/probe_ram.json" ;;
