@@ -81,12 +81,15 @@ SAT_START_N="${SAT_START_N:-1}"                     # starting thread count in s
 SAT_STEP="${SAT_STEP:-1}"                           # thread increment step in sat sweep
 SAT_MAX_N="${SAT_MAX_N:-64}"                         # max thread count in sat sweep
 THREAD_COUNTS="${THREAD_COUNTS:-}"                  # thread counts to sweep (auto-generated linear if empty)
-SAT_RUNTIME="${SAT_RUNTIME:-120}"                   # seconds per thread count in sat sweep
-SAT_SKIP="${SAT_SKIP:-30}"                          # warmup skip in sat sweep
+SAT_RUNTIME="${SAT_RUNTIME:-}"                   # seconds per thread count in sat sweep (inherits from RUNTIME if not set)
+SAT_SKIP="${SAT_SKIP:-}"                         # warmup skip in sat sweep (inherits from SKIP if not set)
 
 # Probe sweep (applies to io, cpu, ram probes)
-RUNTIME="${RUNTIME:-120}"                           # seconds per probe measurement
-SKIP="${SKIP:-30}"                                  # warmup skip per measurement (= probe worker warmup)
+RUNTIME="${RUNTIME:-120}"
+SKIP="${SKIP:-30}"
+# Inherit SAT values from probe defaults if not explicitly set
+if [[ -z "${SAT_RUNTIME}" ]]; then SAT_RUNTIME="${RUNTIME}"; fi
+if [[ -z "${SAT_SKIP}" ]]; then SAT_SKIP="${SKIP}"; fi                       # warmup skip per measurement (= probe worker warmup)
 DROP_PCT="${DROP_PCT:-0.05}"                        # RocksDB ops/s drop to call interference (5%)
 INTERFERENCE_COUNT="${INTERFERENCE_COUNT:-3}"       # consecutive interference events to stop Phase 1
 SAMPLES="${SAMPLES:-1}"                             # samples per probe level (use ≥3 for paper)
