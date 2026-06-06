@@ -130,6 +130,7 @@ SKIP_LOAD=false
 SKIP_SATURATION=false
 BG_THREADS_OVERRIDE=""   # set with --bg-threads to bypass saturation sweep
 PHASE="full"
+RESOURCE_TYPE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -143,6 +144,8 @@ while [[ $# -gt 0 ]]; do
         --drop-caches)        DROP_CACHES=true ;;
         --phase)              PHASE="$2"; shift ;;
         --phase=*)            PHASE="${1#*=}" ;;
+        --resource-type)         RESOURCE_TYPE="$2"; shift ;;
+        --resource-type=*)       RESOURCE_TYPE="${1#*=}" ;;
         --sat-start-n)        SAT_START_N="$2"; shift ;;
         --sat-start-n=*)      SAT_START_N="${1#*=}" ;;
         --sat-step)           SAT_STEP="$2"; shift ;;
@@ -358,41 +361,47 @@ COMMON_PROBE_ARGS=(
 # ---------------------------------------------------------------------------
 # Phase 3: IO slack probe
 # ---------------------------------------------------------------------------
-sep
-log "Phase 3: IO slack probe (probe_io_mode=$PROBE_IO_MODE) …"
-python3 "$REPO/scripts/probe_rocksdb.py" \
-    --probe-type     io \
-    --probe-io-mode  "$PROBE_IO_MODE" \
-    --output         "$OUTPUT_DIR/probe_io.json" \
-    --plot           "$OUTPUT_DIR/probe_io.png" \
-    "${COMMON_PROBE_ARGS[@]}"
-log "IO probe done.  Result → $OUTPUT_DIR/probe_io.json"
+if [ -z "$RESOURCE_TYPE" ] || [ "$RESOURCE_TYPE" = "io" ]; then
+    sep
+    log "Phase 3: IO slack probe (probe_io_mode=$PROBE_IO_MODE) …"
+    python3 "$REPO/scripts/probe_rocksdb.py" \
+        --probe-type     io \
+        --probe-io-mode  "$PROBE_IO_MODE" \
+        --output         "$OUTPUT_DIR/probe_io.json" \
+        --plot           "$OUTPUT_DIR/probe_io.png" \
+        "${COMMON_PROBE_ARGS[@]}"
+    log "IO probe done.  Result → $OUTPUT_DIR/probe_io.json"
+fi
 
 # ---------------------------------------------------------------------------
 # Phase 4: CPU slack probe
 # ---------------------------------------------------------------------------
-sep
-log "Phase 4: CPU slack probe (probe_cpu_mode=$PROBE_CPU_MODE) …"
-python3 "$REPO/scripts/probe_rocksdb.py" \
-    --probe-type      cpu \
-    --probe-cpu-mode  "$PROBE_CPU_MODE" \
-    --output          "$OUTPUT_DIR/probe_cpu.json" \
-    --plot            "$OUTPUT_DIR/probe_cpu.png" \
-    "${COMMON_PROBE_ARGS[@]}"
-log "CPU probe done.  Result → $OUTPUT_DIR/probe_cpu.json"
+if [ -z "$RESOURCE_TYPE" ] || [ "$RESOURCE_TYPE" = "cpu" ]; then
+    sep
+    log "Phase 4: CPU slack probe (probe_cpu_mode=$PROBE_CPU_MODE) …"
+    python3 "$REPO/scripts/probe_rocksdb.py" \
+        --probe-type      cpu \
+        --probe-cpu-mode  "$PROBE_CPU_MODE" \
+        --output          "$OUTPUT_DIR/probe_cpu.json" \
+        --plot            "$OUTPUT_DIR/probe_cpu.png" \
+        "${COMMON_PROBE_ARGS[@]}"
+    log "CPU probe done.  Result → $OUTPUT_DIR/probe_cpu.json"
+fi
 
 # ---------------------------------------------------------------------------
 # Phase 5: RAM slack probe
 # ---------------------------------------------------------------------------
-sep
-log "Phase 5: RAM slack probe (probe_mem_mode=$PROBE_MEM_MODE) …"
-python3 "$REPO/scripts/probe_rocksdb.py" \
-    --probe-type      ram \
-    --probe-mem-mode  "$PROBE_MEM_MODE" \
-    --output          "$OUTPUT_DIR/probe_ram.json" \
-    --plot            "$OUTPUT_DIR/probe_ram.png" \
-    "${COMMON_PROBE_ARGS[@]}"
-log "RAM probe done.  Result → $OUTPUT_DIR/probe_ram.json"
+if [ -z "$RESOURCE_TYPE" ] || [ "$RESOURCE_TYPE" = "ram" ]; then
+    sep
+    log "Phase 5: RAM slack probe (probe_mem_mode=$PROBE_MEM_MODE) …"
+    python3 "$REPO/scripts/probe_rocksdb.py" \
+        --probe-type      ram \
+        --probe-mem-mode  "$PROBE_MEM_MODE" \
+        --output          "$OUTPUT_DIR/probe_ram.json" \
+        --plot            "$OUTPUT_DIR/probe_ram.png" \
+        "${COMMON_PROBE_ARGS[@]}"
+    log "RAM probe done.  Result → $OUTPUT_DIR/probe_ram.json"
+fi
 
 # ---------------------------------------------------------------------------
 # Summary
