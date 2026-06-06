@@ -108,7 +108,7 @@ def plot_slack_result(result: dict, out_path: Path) -> None:
     ax = axes[1]
     if p1:
         x  = [0]           + [d["n_probe"]    for d in p1]
-        bg = [baseline_kt] + [d["bg_ktokens"] for d in p1]
+        bg = [baseline_kt] + [d["rdb_ktokens"] for d in p1]
 
         ax.plot(x, bg, "o-", color="#4c72b0", label="bg throughput (R)",
                 linewidth=2, markersize=5)
@@ -135,13 +135,18 @@ def plot_slack_result(result: dict, out_path: Path) -> None:
     # ---- Summary text box -------------------------------------------------
     cap_kt = result.get("capacity_ktokens")
     ru_pct = result.get("resource_usage_pct")
-    summary_lines = [
-        f"Background load:  {result['bg_procs']} workers  "
-        f"io_mix={result['bg_io_mix']} mem_mix={result['bg_mem_mix']} intensity={result['bg_intensity']}",
-        f"Baseline B = {baseline_kt:.3f} kT/s    "
-        f"Slack S = {slack_kt:.3f} kT/s    "
-        f"R at plateau = {r_kt:.3f} kT/s",
-    ]
+    summary_lines = []
+    # Background load info (RocksDB)
+    bg_threads = result.get('rocksdb_bg_threads')
+    if bg_threads is not None:
+        summary_lines.append(f"Background load:  {bg_threads} RocksDB threads")
+    # No explicit io/mem mix for RocksDB background; include spec if available
+    bg_spec = result.get('rocksdb_workload_spec')
+    if bg_spec:
+        summary_lines.append(f"Workload spec: {bg_spec}")
+    summary_lines.append(f"Baseline B = {baseline_kt:.3f} kT/s")
+    summary_lines.append(f"Slack S = {slack_kt:.3f} kT/s")
+    summary_lines.append(f"R at plateau = {r_kt:.3f} kT/s")
     if cap_kt is not None:
         summary_lines.append(f"Capacity C = {cap_kt:.3f} kT/s")
     if ru_pct is not None:
