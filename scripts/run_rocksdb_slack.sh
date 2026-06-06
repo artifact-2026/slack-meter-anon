@@ -146,6 +146,8 @@ while [[ $# -gt 0 ]]; do
         --phase=*)            PHASE="${1#*=}" ;;
         --resource-type)         RESOURCE_TYPE="$2"; shift ;;
         --resource-type=*)       RESOURCE_TYPE="${1#*=}" ;;
+        --io-mode)          PROBE_IO_MODE="$2"; shift ;;
+        --io-mode=*)        PROBE_IO_MODE="${1#*=}" ;;
         --sat-start-n)        SAT_START_N="$2"; shift ;;
         --sat-start-n=*)      SAT_START_N="${1#*=}" ;;
         --sat-step)           SAT_STEP="$2"; shift ;;
