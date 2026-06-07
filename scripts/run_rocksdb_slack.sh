@@ -108,7 +108,7 @@ PROBE_MEM_MODE="${PROBE_MEM_MODE:-mem_copy}"
 
 # Reset / cache behaviour
 RESET_DB_PER_POINT="${RESET_DB_PER_POINT:-false}"   # wipe+reload DB before every measurement
-DROP_CACHES="${DROP_CACHES:-false}"                 # drop OS page cache before each measurement
+DROP_CACHES="${DROP_CACHES:-true}"                  # drop OS page cache before each measurement
 
 # Output
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO/results/rocksdb_slack_$(date +%Y%m%d_%H%M%S)}"
@@ -233,6 +233,14 @@ else
     sep
     log "Phase 1: Loading RocksDB database ($RECORD_COUNT records) …"
 
+    # Wipe any existing DB so bootstrap opens a clean default-CF-only instance.
+    # If the DB already has a "baseline" column family, DB::Open(default CF only)
+    # will fail with "Column families not opened: baseline".
+    if [[ -d "$BG_DBPATH" ]]; then
+        log "  Wiping existing DB at $BG_DBPATH …"
+        rm -rf "$BG_DBPATH"
+    fi
+
     # Build a temp spec with dbpath overridden so it wins over any dbpath
     # set inside BG_SPEC.  We filter out existing definitions of overridden
     # keys to ensure our overrides take effect regardless of parser precedence.
@@ -257,6 +265,15 @@ else
 
     rm -f "$LOAD_SPEC"
     log "Load complete.  Log → $OUTPUT_DIR/load.log"
+
+    # Drop OS page cache after loading so the first measurement reads from disk,
+    # matching the per-point behaviour in probe_rocksdb.py and cpu_slack_sweep.sh.
+    if [[ "$DROP_CACHES" == "true" ]]; then
+        log "  Dropping OS page cache after initial load …"
+        sync
+        echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null \
+            || log "  WARNING: drop_caches failed — first measurement may read from RAM."
+    fi
 fi
 
 # ---------------------------------------------------------------------------
