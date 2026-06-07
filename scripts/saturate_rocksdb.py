@@ -109,7 +109,15 @@ def load_db(
     record_count: int,
     log_path: str | None = None,
 ) -> None:
-    """Load a fresh RocksDB database via ycsb_test's load phase."""
+    """Wipe dbpath (if it exists) and load a fresh RocksDB database via ycsb_test.
+
+    The wipe is done here rather than in the caller so every code path that
+    loads the DB is safe: bootstrap opens with only the default column family,
+    which fails if an existing DB already has the 'baseline' column family.
+    """
+    if os.path.exists(dbpath):
+        print(f"  [load] Wiping existing DB at {dbpath} …", flush=True)
+        shutil.rmtree(dbpath)
     tmp_dir = os.path.dirname(spec_path)
     load_spec = write_temp_spec(
         spec_path, tmp_dir,
