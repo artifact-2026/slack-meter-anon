@@ -155,8 +155,13 @@ def run_measurement(
     file_size_bytes: int,
     duration_s:      int = 600,
     samples:         int = 1,
+    n_split_procs:   int = 1,
 ) -> tuple[float, float]:
     """Run split_job + probe workers concurrently; return (split_rows_s, probe_tput).
+
+    n_split_procs concurrent split_job processes are launched (each with its own
+    --out_dir subdirectory); their throughputs are summed so the aggregate matches
+    the target write rate.
 
     Both split_job (via --duration) and probe workers run for duration_s seconds
     and exit naturally — no SIGTERM.
@@ -168,15 +173,19 @@ def run_measurement(
     sample_probe: list[float] = []
 
     for sample_idx in range(samples):
-        split_cmd = [
-            split_binary,
-            "--phase",    "split",
-            "--data_dir", data_dir,
-            "--out_dir",  out_dir,
-            "--batch",    str(batch),
-            "--groups",   str(groups),
-            "--duration", str(duration_s),
-        ]
+        # Build one command per split_job process, each with its own out_dir.
+        split_cmds = []
+        for proc_idx in range(n_split_procs):
+            proc_out_dir = out_dir if n_split_procs == 1 else f"{out_dir}/proc{proc_idx}"
+            split_cmds.append([
+                split_binary,
+                "--phase",    "split",
+                "--data_dir", data_dir,
+                "--out_dir",  proc_out_dir,
+                "--batch",    str(batch),
+                "--groups",   str(groups),
+                "--duration", str(duration_s),
+            ])
 
         # Start probe workers first so they are already running and consuming
         # resources when split_job begins.
@@ -213,26 +222,28 @@ def run_measurement(
                 env=env,
             ))
 
-        # Now start split_job.
-        split_proc = subprocess.Popen(
-            split_cmd,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True,
-        )
+        # Now start all split_job processes concurrently.
+        split_procs = [
+            subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            for cmd in split_cmds
+        ]
 
-        # Wait for split_job to finish (it runs for duration_s seconds).
-        split_stdout, split_stderr = split_proc.communicate()
+        # Wait for all split_job processes and sum their throughputs.
+        split_rows_s_total = 0.0
+        any_nan = False
+        for proc in split_procs:
+            stdout, stderr = proc.communicate()
+            combined = stdout + stderr
+            try:
+                split_rows_s_total += _parse_throughput_mean(combined)
+            except ValueError as e:
+                print(f"\n  [probe_split] WARNING: {e}")
+                any_nan = True
+
+        split_rows_s = float("nan") if any_nan and split_rows_s_total == 0.0 else split_rows_s_total
 
         # Wait for probe workers to finish (they also run for duration_s seconds
         # and exit naturally — no SIGTERM needed).
-
-        # Parse split_job throughput.
-        combined = split_stdout + split_stderr
-        try:
-            split_rows_s = _parse_throughput_mean(combined)
-        except ValueError as e:
-            print(f"\n  [probe_split] WARNING: {e}")
-            split_rows_s = float("nan")
 
         # Collect probe worker output (best-effort: workers may not print JSON
         # when terminated mid-run, but probe_tput is informational only —
@@ -350,6 +361,8 @@ def sweep(
     samples:         int   = 1,
     baseline_samples: int  = 1,
     interference_threshold_count: int = 3,
+    # Concurrent split_job processes
+    n_split_procs:   int   = 1,
     # Scratch
     tmp_dir:         str   = "/holly/slack-meter-probe-split",
 ) -> dict:
@@ -380,6 +393,7 @@ def sweep(
         file_size_bytes=file_size_bytes,
         duration_s=duration_s,
         samples=samples,
+        n_split_procs=n_split_procs,
     )
 
     # ------------------------------------------------------------------
@@ -497,6 +511,7 @@ def sweep(
         data_dir              = data_dir,
         split_batch           = batch,
         split_groups          = groups,
+        n_split_procs         = n_split_procs,
         phase1_probes         = phase1,
         phase2_probes         = phase2,
     )
@@ -541,6 +556,9 @@ def main() -> None:
     parser.add_argument("--samples",      type=int,   default=1,    metavar="N")
     parser.add_argument("--baseline-samples", type=int, default=1,  metavar="N")
     parser.add_argument("--interference-threshold-count", type=int, default=3, metavar="N")
+    parser.add_argument("--split-processes", type=int, default=4, metavar="N",
+                        help="Number of concurrent split_job processes (summed throughput). "
+                             "Use 4 to match ~34k write ops/s from RocksDB. (default: 4)")
     # Output
     parser.add_argument("--tmp-dir",      default="/holly/slack-meter-probe-split", metavar="DIR")
     parser.add_argument("--output",       default=None, metavar="FILE")
@@ -563,6 +581,7 @@ def main() -> None:
     print(f"  split_job    : {args.split_binary}")
     print(f"  data-dir     : {args.data_dir}")
     print(f"  batch/groups : {args.batch} / {args.groups}")
+    print(f"  split procs  : {args.split_processes} (aggregate throughput target)")
     print(f"  duration     : {args.duration}s")
     print(f"  worker       : {args.worker_bin}")
     print(f"  drop_pct     : {args.drop_pct*100:.0f}%")
@@ -588,6 +607,7 @@ def main() -> None:
         samples           = args.samples,
         baseline_samples  = args.baseline_samples,
         interference_threshold_count = args.interference_threshold_count,
+        n_split_procs     = args.split_processes,
         tmp_dir           = args.tmp_dir,
     )
 
