@@ -10,7 +10,6 @@
 #include <thread>
 #include <unistd.h>
 
-
 #ifdef __APPLE__
 #define fdatasync(fd) fsync(fd)
 #ifndef O_DIRECT
@@ -101,7 +100,8 @@ IoState open_io_file(const std::string &tmp_dir, const std::string &io_mode,
       file_exists_and_ok = true;
   }
 
-  // Aligned buffer — shared by all four I/O variants (sized to 32 KiB to support seq ops).
+  // Aligned buffer — shared by all four I/O variants (sized to 32 KiB to
+  // support seq ops).
   if (posix_memalign(&st.buf, 4096, SEQ_IO_BUF_SIZE) != 0)
     return st;
 
@@ -308,8 +308,9 @@ void do_io_work_4k_seq_read(IoState &st) {
     st.seq_cursor = 0;
 }
 
-// pwrite 32 KiB at seq_cursor; advance cursor by SEQ_IO_BUF_SIZE, wrap at file_size.
-// Mutates sector words before writing (same dedup-defeat as rand_write).
+// pwrite 32 KiB at seq_cursor; advance cursor by SEQ_IO_BUF_SIZE, wrap at
+// file_size. Mutates sector words before writing (same dedup-defeat as
+// rand_write).
 void do_io_work_32k_seq_write(IoState &st, std::mt19937_64 &rng) {
   if (st.fd < 0 || !st.buf)
     return;
@@ -327,7 +328,8 @@ void do_io_work_32k_seq_write(IoState &st, std::mt19937_64 &rng) {
     st.seq_cursor = 0;
 }
 
-// pread 32 KiB at seq_cursor; advance cursor by SEQ_IO_BUF_SIZE, wrap at file_size.
+// pread 32 KiB at seq_cursor; advance cursor by SEQ_IO_BUF_SIZE, wrap at
+// file_size.
 void do_io_work_32k_seq_read(IoState &st) {
   if (st.fd < 0 || !st.buf)
     return;
