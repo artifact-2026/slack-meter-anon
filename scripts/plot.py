@@ -108,7 +108,7 @@ def plot_slack_result(result: dict, out_path: Path) -> None:
     ax = axes[1]
     if p1:
         x  = [0]           + [d["n_probe"]    for d in p1]
-        bg = [baseline_kt] + [d["rdb_ktokens"] for d in p1]
+        bg = [baseline_kt] + [d["bg_ktokens"] for d in p1]
 
         ax.plot(x, bg, "o-", color="#4c72b0", label="bg throughput (R)",
                 linewidth=2, markersize=5)
