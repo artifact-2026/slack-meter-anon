@@ -1,12 +1,33 @@
 # docker-compose.yml
 # Run from the repo root:   docker compose -f infra/docker-compose.yml up
 #
+# ── Synthetic workload services ──────────────────────────────────────────────
 # Services:
 #   experiment          - saturation sweep (default entrypoint)
 #   calibrate           - capacity calibration (must run before fungibility tests)
 #   fungibility-io      - test_fungibility_matrix.py
 #   fungibility-cpu     - test_fungibility_matrix_cpu.py
 #   fungibility-mem     - test_fungibility_matrix_mem.py
+#
+# ── RocksDB workload services (profile: rocksdb) ─────────────────────────────
+# Services:
+#   rocksdb-saturate    - RocksDB saturation sweep only (finds knee thread count)
+#   rocksdb-slack       - RocksDB slack probes only (io + cpu + ram)
+#   rocksdb-full        - RocksDB full run: load + saturation + slack probes
+#
+# Quickstart for RocksDB services (use infra/run_rocksdb.sh for auto block-device):
+#   BG_BINARY=/holly/htap/build/src/test/ycsb/ycsb_test \
+#   BG_SPEC=/holly/htap/src/test/ycsb/workloads/test_workloada.spec \
+#   docker compose -f infra/docker-compose.yml run rocksdb-full
+#
+#   # Two-phase workflow — run saturation first, then slack with the knee:
+#   OUTPUT_DIR=/app/results/my_run \
+#   BG_BINARY=... BG_SPEC=... \
+#   docker compose -f infra/docker-compose.yml run rocksdb-saturate
+#
+#   OUTPUT_DIR=/app/results/my_run \
+#   BG_BINARY=... BG_SPEC=... \
+#   docker compose -f infra/docker-compose.yml run rocksdb-slack -- --bg-threads 10
 #
 # All services share the same image, blkio limits, and environment so that
 # calibration and experiments run under identical I/O constraints.
@@ -23,6 +44,88 @@
 
 version: "3.8"
 
+# ── RocksDB base configuration ────────────────────────────────────────────────
+# Same CPU / memory / blkio constraints as the synthetic experiments.
+# privileged: true is needed for DROP_CACHES (writes to /proc/sys/vm/drop_caches).
+# /holly is mounted read-write so ycsb_test, workload specs, and the RocksDB
+# database directory are all accessible at the same paths as on the host.
+#
+# Required env vars (no defaults — must be set by the caller):
+#   BG_BINARY   path to the ycsb_test binary  (e.g. /holly/htap/build/.../ycsb_test)
+#   BG_SPEC     path to the YCSB workload spec (e.g. /holly/htap/.../test_workloada.spec)
+#
+# Optional env vars (all have sensible defaults):
+#   BG_DBPATH             RocksDB database directory  (default: /holly/rocksdb_operation)
+#   RECORD_COUNT          records to load              (default: 5000000)
+#   RUNTIME               seconds per measurement      (default: 120)
+#   SKIP                  warmup skip in seconds       (default: 30)
+#   DROP_PCT              interference threshold       (default: 0.05)
+#   RESET_DB_PER_POINT    wipe+reload before each pt  (default: false)
+#   DROP_CACHES           drop OS page cache           (default: true)
+#   SAMPLES               samples per probe level      (default: 1)
+#   BASELINE_SAMPLES      samples for Phase 0          (default: 1)
+#   BINARY_STEPS          Phase 2 bisection depth      (default: 5)
+#   SAT_MAX_N             max threads in sat sweep     (default: 32)
+#   SAT_STEP              thread step in sat sweep     (default: 1)
+#   RESOURCE_TYPE         io | cpu | ram | (all)       (default: all)
+#   OUTPUT_DIR            result directory inside cont (default: /app/results/rocksdb_slack_<ts>)
+x-rocksdb-base: &rocksdb-base
+  build:
+    context: ..
+    dockerfile: infra/Dockerfile
+  cpus: 4.0
+  mem_limit: 4g
+  privileged: true
+  blkio_config:
+    device_write_bps:
+      - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
+        rate: 419430400
+    device_read_bps:
+      - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
+        rate: 419430400
+    device_write_iops:
+      - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
+        rate: 100000
+    device_read_iops:
+      - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
+        rate: 100000
+  environment:
+    PYTHONUNBUFFERED: "1"
+    SKIP_BUILD: "1"
+    # ── RocksDB background ────────────────────────────────────────────────
+    BG_BINARY: ${BG_BINARY:-}
+    BG_SPEC: ${BG_SPEC:-}
+    BG_DBPATH: ${BG_DBPATH:-/holly/rocksdb_operation}
+    RECORD_COUNT: ${RECORD_COUNT:-5000000}
+    LOAD_THREADS: ${LOAD_THREADS:-8}
+    ROCKSDB_PARALLELISM: ${ROCKSDB_PARALLELISM:-32}
+    # ── Saturation sweep ─────────────────────────────────────────────────
+    SAT_MAX_N: ${SAT_MAX_N:-32}
+    SAT_STEP: ${SAT_STEP:-1}
+    # ── Probe sweep ───────────────────────────────────────────────────────
+    RUNTIME: ${RUNTIME:-120}
+    SKIP: ${SKIP:-30}
+    DROP_PCT: ${DROP_PCT:-0.05}
+    RESET_DB_PER_POINT: ${RESET_DB_PER_POINT:-false}
+    DROP_CACHES: ${DROP_CACHES:-true}
+    SAMPLES: ${SAMPLES:-1}
+    BASELINE_SAMPLES: ${BASELINE_SAMPLES:-1}
+    BINARY_STEPS: ${BINARY_STEPS:-5}
+    MAX_PROBES: ${MAX_PROBES:-64}
+    STEP: ${STEP:-1}
+    FILE_SIZE_MIB: ${FILE_SIZE_MIB:-256}
+    RESOURCE_TYPE: ${RESOURCE_TYPE:-}
+    PROBE_IO_MODE: ${PROBE_IO_MODE:-rand_write}
+    PROBE_CPU_MODE: ${PROBE_CPU_MODE:-cpu_int}
+    PROBE_MEM_MODE: ${PROBE_MEM_MODE:-mem_copy}
+    OUTPUT_DIR: ${OUTPUT_DIR:-/app/results/rocksdb_slack}
+  volumes:
+    - ../results:/app/results
+    - ../scripts:/app/scripts
+    - ../workloads:/app/workloads
+    - ${HOLLY_PATH:-/holly}:/holly
+
+# ── Synthetic-workload base configuration ─────────────────────────────────────
 x-base: &base
   build:
     context: ..
@@ -95,4 +198,39 @@ services:
     profiles:
       - tools
     entrypoint: [ "python3", "/app/scripts/test_fungibility_matrix_mem.py" ]
+
+  # ── RocksDB services ───────────────────────────────────────────────────────
+  # Usage:  bash infra/run_rocksdb.sh [saturate|slack|full] [extra args]
+  # Or directly:
+  #   BG_BINARY=... BG_SPEC=... \
+  #   docker compose -f infra/docker-compose.yml run rocksdb-full
+
+  rocksdb-saturate:
+    <<: *rocksdb-base
+    profiles:
+      - rocksdb
+    # Runs the load phase and the saturation sweep; stops before slack probes.
+    # Produces OUTPUT_DIR/saturation.json which rocksdb-slack can consume.
+    # Extra CLI args (e.g. --sat-start-n 4 --sat-step 2) can be appended via
+    #   docker compose run rocksdb-saturate -- --sat-step 2
+    entrypoint: [ "bash", "/app/scripts/run_rocksdb_slack.sh", "--phase", "saturate" ]
+
+  rocksdb-slack:
+    <<: *rocksdb-base
+    profiles:
+      - rocksdb
+    # Runs IO, CPU, and RAM slack probes against an already-loaded RocksDB DB.
+    # Reads the knee thread count from OUTPUT_DIR/saturation.json if present,
+    # or pass --bg-threads N explicitly:
+    #   docker compose run rocksdb-slack -- --bg-threads 10
+    # Set RESOURCE_TYPE=io (or cpu / ram) to run a single probe only.
+    entrypoint: [ "bash", "/app/scripts/run_rocksdb_slack.sh", "--phase", "slack", "--skip-load" ]
+
+  rocksdb-full:
+    <<: *rocksdb-base
+    profiles:
+      - rocksdb
+    # Full experiment in one shot: DB load → saturation sweep → IO/CPU/RAM probes.
+    # Equivalent to running rocksdb-saturate then rocksdb-slack with the same OUTPUT_DIR.
+    entrypoint: [ "bash", "/app/scripts/run_rocksdb_slack.sh" ]
 
