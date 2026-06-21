@@ -170,6 +170,15 @@ def drop_page_cache() -> None:
     print("  [cache] Dropping OS page cache …", end=" ", flush=True)
     try:
         subprocess.run(["sync"], check=True, capture_output=True)
+        # Try writing directly first (e.g. if running as root in Docker container)
+        try:
+            with open("/proc/sys/vm/drop_caches", "w") as f:
+                f.write("3")
+            print("done.")
+            return
+        except (PermissionError, FileNotFoundError):
+            pass
+
         result = subprocess.run(
             ["sudo", "tee", "/proc/sys/vm/drop_caches"],
             input="3", text=True, capture_output=True,

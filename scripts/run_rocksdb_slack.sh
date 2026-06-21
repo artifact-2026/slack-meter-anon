@@ -227,9 +227,69 @@ log "  Thread counts    : $THREAD_COUNTS"
 # ---------------------------------------------------------------------------
 if [[ "$SKIP_LOAD" == "true" ]]; then
     sep
-    log "Skipping load phase (--skip-load). Starting from scratch by ensuring empty DB directory at $BG_DBPATH."
-    rm -rf "$BG_DBPATH"
-    mkdir -p "$BG_DBPATH"
+    # Prepare a temp spec for check and potential bootstrap
+    CHECK_SPEC=$(mktemp "$TMP_DIR/check_spec_XXXXX.spec")
+    grep -E -v "^(dbpath|recordcount|operationcount|rocksdb_parallelism|xputwindow)[[:space:]]*=" "$BG_SPEC" > "$CHECK_SPEC" || true
+    printf "\ndbpath=%s\nrecordcount=1\noperationcount=1\nrocksdb_parallelism=%s\nxputwindow=0\n" \
+        "$BG_DBPATH" "$ROCKSDB_PARALLELISM" >> "$CHECK_SPEC"
+
+    # Verify if DB exists and has the baseline column family created by attempting a dry run open and checking for errors
+    OPEN_ERRORS=$("$BG_BINARY" \
+        -db        baseline \
+        -dbpath    "$BG_DBPATH" \
+        -P         "$CHECK_SPEC" \
+        -bootstrap false \
+        -threads   1 \
+        -load      false \
+        -run       false \
+        -throughput false \
+        -runtime   0 \
+        -levels    7 \
+        -table     baseline \
+        2>&1) || true
+
+    if [[ -d "$BG_DBPATH" ]] && [[ ! "$OPEN_ERRORS" =~ "Can't open rocksdb" ]] && [[ ! "$OPEN_ERRORS" =~ "Column family not found" ]]; then
+        log "Skipping load phase (--skip-load). Found existing valid DB at $BG_DBPATH, reusing it."
+        rm -f "$CHECK_SPEC"
+    else
+        log "Skipping load phase (--skip-load), but DB at $BG_DBPATH is empty, missing, or lacks the 'baseline' column family."
+        log "Bootstrapping empty database structure (column families) at $BG_DBPATH to start from scratch."
+        rm -rf "$BG_DBPATH"
+        mkdir -p "$BG_DBPATH"
+
+        # Try bootstrapping with -load false (leaving it 100% empty)
+        log "Trying bootstrap with -load false..."
+        if "$BG_BINARY" \
+            -db        baseline \
+            -dbpath    "$BG_DBPATH" \
+            -P         "$CHECK_SPEC" \
+            -bootstrap true \
+            -threads   1 \
+            -load      false \
+            -run       false \
+            -throughput false \
+            -runtime   0 \
+            -levels    7 \
+            -table     baseline; then
+            log "Bootstrap complete (empty database)."
+        else
+            log "Bootstrap with -load false failed/unsupported; trying with 1 record fallback..."
+            "$BG_BINARY" \
+                -db        baseline \
+                -dbpath    "$BG_DBPATH" \
+                -P         "$CHECK_SPEC" \
+                -bootstrap true \
+                -threads   1 \
+                -load      true \
+                -run       false \
+                -throughput false \
+                -runtime   0 \
+                -levels    7 \
+                -table     baseline
+            log "Bootstrap complete (1 record fallback)."
+        fi
+        rm -f "$CHECK_SPEC"
+    fi
 else
     sep
     log "Phase 1: Loading RocksDB database ($RECORD_COUNT records) …"
