@@ -227,8 +227,9 @@ log "  Thread counts    : $THREAD_COUNTS"
 # ---------------------------------------------------------------------------
 if [[ "$SKIP_LOAD" == "true" ]]; then
     sep
-    log "Skipping load phase (--skip-load). Assuming DB exists at $BG_DBPATH."
-    [[ -d "$BG_DBPATH" ]] || die "DB directory not found and --skip-load was set: $BG_DBPATH"
+    log "Skipping load phase (--skip-load). Starting from scratch by ensuring empty DB directory at $BG_DBPATH."
+    rm -rf "$BG_DBPATH"
+    mkdir -p "$BG_DBPATH"
 else
     sep
     log "Phase 1: Loading RocksDB database ($RECORD_COUNT records) …"
