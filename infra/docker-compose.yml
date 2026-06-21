@@ -42,8 +42,6 @@
 #   docker compose -f infra/docker-compose.yml run fungibility-io
 #   docker compose -f infra/docker-compose.yml run experiment
 
-version: "3.8"
-
 # ── RocksDB base configuration ────────────────────────────────────────────────
 # Same CPU / memory / blkio constraints as the synthetic experiments.
 # privileged: true is needed for DROP_CACHES (writes to /proc/sys/vm/drop_caches).
@@ -233,4 +231,3 @@ services:
     # Full experiment in one shot: DB load → saturation sweep → IO/CPU/RAM probes.
     # Equivalent to running rocksdb-saturate then rocksdb-slack with the same OUTPUT_DIR.
     entrypoint: [ "bash", "/app/scripts/run_rocksdb_slack.sh" ]
-
