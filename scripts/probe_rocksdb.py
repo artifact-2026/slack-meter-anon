@@ -196,6 +196,15 @@ def _drop_page_cache() -> None:
     print("  [cache] Dropping OS page cache …", end=" ", flush=True)
     try:
         subprocess.run(["sync"], check=True, capture_output=True)
+        # Try writing directly first (e.g. if running as root in Docker container)
+        try:
+            with open("/proc/sys/vm/drop_caches", "w") as f:
+                f.write("3")
+            print("done.")
+            return
+        except (PermissionError, FileNotFoundError):
+            pass
+
         r = subprocess.run(
             ["sudo", "tee", "/proc/sys/vm/drop_caches"],
             input="3", text=True, capture_output=True,
@@ -480,6 +489,7 @@ def _run_phase2(
         steps.append(dict(
             step=step, intensity=mid,
             rdb_ops_s=rdb_ops_s, rdb_ktokens=rdb_ops_s * _KT,
+            bg_ktokens=rdb_ops_s * _KT,
             probe_ktokens=probe_tput * _KT,
             interfered=interfered,
         ))
@@ -631,6 +641,7 @@ def sweep(
         phase1.append(dict(
             n_probe=n_probe,
             rdb_ops_s=rdb_ops_s, rdb_ktokens=rdb_ops_s * _KT,
+            bg_ktokens=rdb_ops_s * _KT,
             probe_ktokens=probe_tput * _KT,
             interfered=interfered,
         ))
@@ -662,6 +673,7 @@ def sweep(
                         phase1.append(dict(
                             n_probe=verified_n, rdb_ops_s=None,
                             rdb_ktokens=best_rdb_ktokens,
+                            bg_ktokens=best_rdb_ktokens,
                             probe_ktokens=best_probe_ktokens,
                             interfered=False, verified_via_phase2=True,
                         ))
