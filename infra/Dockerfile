@@ -1,5 +1,5 @@
 # ── Build stage ──────────────────────────────────────────────────────────────
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:24.04 AS builder
 
 RUN apt-get update -y && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -17,7 +17,7 @@ RUN cmake -B build -DCMAKE_BUILD_TYPE=Release \
 
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 RUN apt-get update -y && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -27,11 +27,15 @@ RUN apt-get update -y && \
         ca-certificates \
         sysstat \
         procps \
+        libprotobuf32t64 \
+        libjsoncpp25 \
+        liblz4-1 \
+        libzstd1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Python analysis deps
 COPY requirements.txt /tmp/requirements.txt
-RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+RUN pip3 install --break-system-packages --no-cache-dir -r /tmp/requirements.txt
 
 WORKDIR /app
 
