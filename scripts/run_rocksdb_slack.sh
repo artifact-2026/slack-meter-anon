@@ -131,6 +131,7 @@ SKIP_SATURATION=false
 BG_THREADS_OVERRIDE=""   # set with --bg-threads to bypass saturation sweep
 PHASE="full"
 RESOURCE_TYPE=""
+START_N=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -156,6 +157,8 @@ while [[ $# -gt 0 ]]; do
         --sat-max-n=*)        SAT_MAX_N="${1#*=}" ;;
         --thread-counts)      THREAD_COUNTS="$2"; shift ;;
         --thread-counts=*)    THREAD_COUNTS="${1#*=}" ;;
+        --start-n)            START_N="$2"; shift ;;
+        --start-n=*)          START_N="${1#*=}" ;;
         *)  echo "[run_rocksdb_slack] Unknown argument: $1" >&2; exit 1 ;;
     esac
     shift
@@ -434,6 +437,7 @@ COMMON_PROBE_ARGS=(
     --file-size-mib        "$FILE_SIZE_MIB"
     --tmp-dir              "$TMP_DIR"
     --xputfile-dir         "$OUTPUT_DIR/xput_csvs"
+    ${START_N:+--start-n "$START_N"}
     ${RESET_FLAG:+"$RESET_FLAG"}
     ${CACHE_FLAG:+"$CACHE_FLAG"}
 )
