@@ -63,63 +63,64 @@ if [[ $# -gt 0 ]]; then
     case "$1" in
         calibrate|fungibility-io|fungibility-cpu|fungibility-mem)
             SERVICE="$1"; shift
+            REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-            # If WRITE_IOPS or READ_IOPS are set, use `docker run` directly so the
-            # device IOPS limits are applied — docker compose run doesn't expose those
-            # flags and blkio_config in the compose file is silently ignored on cgroups v2.
-            if [[ -n "${WRITE_IOPS:-}" ]] || [[ -n "${READ_IOPS:-}" ]]; then
-                REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+            # Always use `docker run` for these services (never `docker compose run`).
+            # docker compose run inherits blkio_config from x-base (100k IOPS cap),
+            # which throttles calibrate and defeats measurement of real device capacity.
+            # docker run only applies limits when explicitly requested via WRITE_IOPS/READ_IOPS.
 
-                # Build the image with an explicit tag so the name is deterministic.
-                IMAGE="slack-meter-${SERVICE}"
-                docker build -t "$IMAGE" -f "$REPO_ROOT/infra/Dockerfile" "$REPO_ROOT"
+            # Build the image with an explicit tag so the name is deterministic.
+            IMAGE="slack-meter-${SERVICE}"
+            docker build -t "$IMAGE" -f "$REPO_ROOT/infra/Dockerfile" "$REPO_ROOT"
 
-                IOPS_FLAGS=()
+            LIMIT_FLAGS=()
+            if [[ -n "${WRITE_BPS:-}" ]] || [[ -n "${READ_BPS:-}" ]] || \
+               [[ -n "${WRITE_IOPS:-}" ]] || [[ -n "${READ_IOPS:-}" ]]; then
                 if [[ -n "${BLOCK_DEVICE:-}" ]]; then
-                    [[ -n "${WRITE_IOPS:-}" ]] && IOPS_FLAGS+=(--device-write-iops "${BLOCK_DEVICE}:${WRITE_IOPS}")
-                    [[ -n "${READ_IOPS:-}" ]]  && IOPS_FLAGS+=(--device-read-iops  "${BLOCK_DEVICE}:${READ_IOPS}")
+                    [[ -n "${WRITE_BPS:-}" ]]  && LIMIT_FLAGS+=(--device-write-bps  "${BLOCK_DEVICE}:${WRITE_BPS}")
+                    [[ -n "${READ_BPS:-}" ]]   && LIMIT_FLAGS+=(--device-read-bps   "${BLOCK_DEVICE}:${READ_BPS}")
+                    [[ -n "${WRITE_IOPS:-}" ]] && LIMIT_FLAGS+=(--device-write-iops "${BLOCK_DEVICE}:${WRITE_IOPS}")
+                    [[ -n "${READ_IOPS:-}" ]]  && LIMIT_FLAGS+=(--device-read-iops  "${BLOCK_DEVICE}:${READ_IOPS}")
                 else
-                    echo "[warning] BLOCK_DEVICE not set; IOPS limits will not be applied." >&2
+                    echo "[warning] BLOCK_DEVICE not set; I/O limits will not be applied." >&2
                 fi
-
-                # Entrypoints mirror what docker-compose.yml defines per service.
-                # Separated into interpreter + script so --entrypoint can override
-                # the Dockerfile's default ENTRYPOINT (run_saturation_sweep.sh).
-                declare -A INTERP=(
-                    [calibrate]="bash"
-                    [fungibility-io]="python3"
-                    [fungibility-cpu]="python3"
-                    [fungibility-mem]="python3"
-                )
-                declare -A SCRIPTS=(
-                    [calibrate]="/app/scripts/run_calibrate.sh"
-                    [fungibility-io]="/app/scripts/test_fungibility_matrix.py"
-                    [fungibility-cpu]="/app/scripts/test_fungibility_matrix_cpu.py"
-                    [fungibility-mem]="/app/scripts/test_fungibility_matrix_mem.py"
-                )
-
-                docker run --rm \
-                    --cpus 4.0 \
-                    --memory 4g \
-                    "${IOPS_FLAGS[@]}" \
-                    -e PYTHONUNBUFFERED=1 \
-                    -e SKIP_BUILD=1 \
-                    -e RESOURCE_TYPE="${RESOURCE_TYPE:-io}" \
-                    -e IO_MODE="${IO_MODE:-rand_write}" \
-                    -e QUEUE_DEPTH="${QUEUE_DEPTH:-1}" \
-                    -v "$REPO_ROOT/results:/app/results" \
-                    -v "$REPO_ROOT/scripts:/app/scripts" \
-                    -v "$REPO_ROOT/infra/scratch:/holly/scratch" \
-                    -v "$REPO_ROOT/infra/slack-meter-calibrate:/holly/slack-meter-calibrate" \
-                    -v "$REPO_ROOT/infra/slack-meter-loaded-sweep:/holly/slack-meter-loaded-sweep" \
-                    -v "$REPO_ROOT/infra/slack-meter-saturate:/holly/slack-meter-saturate" \
-                    --entrypoint "${INTERP[$SERVICE]}" \
-                    "$IMAGE" \
-                    "${SCRIPTS[$SERVICE]}" "$@"
-                exit $?
             fi
 
-            docker compose -f "$COMPOSE_FILE" --profile tools run --build "$SERVICE" "$@"
+            # Entrypoints mirror what docker-compose.yml defines per service.
+            # Separated into interpreter + script so --entrypoint can override
+            # the Dockerfile's default ENTRYPOINT (run_saturation_sweep.sh).
+            declare -A INTERP=(
+                [calibrate]="bash"
+                [fungibility-io]="python3"
+                [fungibility-cpu]="python3"
+                [fungibility-mem]="python3"
+            )
+            declare -A SCRIPTS=(
+                [calibrate]="/app/scripts/run_calibrate.sh"
+                [fungibility-io]="/app/scripts/test_fungibility_matrix.py"
+                [fungibility-cpu]="/app/scripts/test_fungibility_matrix_cpu.py"
+                [fungibility-mem]="/app/scripts/test_fungibility_matrix_mem.py"
+            )
+
+            docker run --rm \
+                --cpus 4.0 \
+                --memory 4g \
+                "${LIMIT_FLAGS[@]}" \
+                -e PYTHONUNBUFFERED=1 \
+                -e SKIP_BUILD=1 \
+                -e RESOURCE_TYPE="${RESOURCE_TYPE:-io}" \
+                -e IO_MODE="${IO_MODE:-rand_write}" \
+                -e QUEUE_DEPTH="${QUEUE_DEPTH:-1}" \
+                -v "$REPO_ROOT/results:/app/results" \
+                -v "$REPO_ROOT/scripts:/app/scripts" \
+                -v "$REPO_ROOT/infra/scratch:/holly/scratch" \
+                -v "$REPO_ROOT/infra/slack-meter-calibrate:/holly/slack-meter-calibrate" \
+                -v "$REPO_ROOT/infra/slack-meter-loaded-sweep:/holly/slack-meter-loaded-sweep" \
+                -v "$REPO_ROOT/infra/slack-meter-saturate:/holly/slack-meter-saturate" \
+                --entrypoint "${INTERP[$SERVICE]}" \
+                "$IMAGE" \
+                "${SCRIPTS[$SERVICE]}" "$@"
             exit $?
             ;;
         rocksdb-saturate|rocksdb-slack|rocksdb-full)

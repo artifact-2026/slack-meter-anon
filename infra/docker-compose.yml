@@ -77,16 +77,16 @@ x-rocksdb-base: &rocksdb-base
   blkio_config:
     device_write_bps:
       - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
-        rate: 419430400
+        rate: ${WRITE_BPS:-6442450944}
     device_read_bps:
       - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
-        rate: 419430400
+        rate: ${READ_BPS:-6442450944}
     device_write_iops:
       - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
-        rate: 100000
+        rate: ${WRITE_IOPS:-1500000}
     device_read_iops:
       - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
-        rate: 100000
+        rate: ${READ_IOPS:-1500000}
   environment:
     PYTHONUNBUFFERED: "1"
     SKIP_BUILD: "1"
@@ -133,16 +133,16 @@ x-base: &base
   blkio_config:
     device_write_bps:
       - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
-        rate: 419430400
+        rate: ${WRITE_BPS:-6442450944}
     device_read_bps:
       - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
-        rate: 419430400
+        rate: ${READ_BPS:-6442450944}
     device_write_iops:
       - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
-        rate: 100000
+        rate: ${WRITE_IOPS:-1500000}
     device_read_iops:
       - path: ${BLOCK_DEVICE:-/dev/nvme1n1}
-        rate: 100000
+        rate: ${READ_IOPS:-1500000}
   environment:
     PYTHONUNBUFFERED: "1"
     MODE: ${MODE:-full}
