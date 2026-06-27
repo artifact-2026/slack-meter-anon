@@ -85,11 +85,28 @@ fi
 # ---------------------------------------------------------------------------
 if [[ -z "${BLOCK_DEVICE:-}" ]]; then
     if command -v lsblk &>/dev/null && command -v findmnt &>/dev/null; then
-        DETECTED="/dev/$(lsblk -no PKNAME "$(findmnt -n -o SOURCE /)" 2>/dev/null | head -1)"
-        if [[ -e "$DETECTED" ]]; then
-            BLOCK_DEVICE="$DETECTED"
+        # Check /holly first (where DB and scratch files live), fall back to /
+        CHECK_DIR="/holly"
+        if [[ ! -d "$CHECK_DIR" ]]; then
+            CHECK_DIR="/"
+        fi
+        SOURCE_DEV="$(findmnt -n -o SOURCE "$CHECK_DIR" 2>/dev/null || true)"
+        if [[ -n "$SOURCE_DEV" ]]; then
+            # Partition (e.g. nvme0n1p3) → PKNAME gives parent disk (nvme0n1).
+            # Whole disk (e.g. nvme1n1)  → PKNAME is empty, use KNAME instead.
+            DISK_NAME="$(lsblk -no PKNAME "$SOURCE_DEV" 2>/dev/null | head -1)"
+            if [[ -z "$DISK_NAME" ]]; then
+                DISK_NAME="$(lsblk -no KNAME "$SOURCE_DEV" 2>/dev/null | head -1)"
+            fi
+            DETECTED="/dev/$DISK_NAME"
+            if [[ -e "$DETECTED" ]]; then
+                BLOCK_DEVICE="$DETECTED"
+            else
+                echo "[warning] Detected block device $DETECTED does not exist; blkio limits will use default /dev/nvme1n1."
+                BLOCK_DEVICE=""
+            fi
         else
-            echo "[warning] Detected block device $DETECTED does not exist; blkio limits will use default /dev/nvme1n1."
+            echo "[warning] Could not find mount source for $CHECK_DIR; blkio limits will use default /dev/nvme1n1."
             BLOCK_DEVICE=""
         fi
     else
