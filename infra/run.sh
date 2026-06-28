@@ -63,20 +63,18 @@ if [[ $# -gt 0 ]]; then
     case "$1" in
         calibrate|fungibility-io|fungibility-cpu|fungibility-mem)
             SERVICE="$1"; shift
-            REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-            # Always use `docker run` for these services (never `docker compose run`).
-            # docker compose run inherits blkio_config from x-base (100k IOPS cap),
-            # which throttles calibrate and defeats measurement of real device capacity.
-            # docker run only applies limits when explicitly requested via WRITE_IOPS/READ_IOPS.
-
-            # Build the image with an explicit tag so the name is deterministic.
-            IMAGE="slack-meter-${SERVICE}"
-            docker build -t "$IMAGE" -f "$REPO_ROOT/infra/Dockerfile" "$REPO_ROOT"
-
-            LIMIT_FLAGS=()
+            # If explicit I/O limits are requested, use `docker run` so we can pass
+            # --device-write-bps/iops flags (docker compose run doesn't expose these).
+            # Otherwise use `docker compose run` — calibrate has blkio_config: {} so
+            # it inherits no limits, and fungibility services inherit the x-base defaults.
             if [[ -n "${WRITE_BPS:-}" ]] || [[ -n "${READ_BPS:-}" ]] || \
                [[ -n "${WRITE_IOPS:-}" ]] || [[ -n "${READ_IOPS:-}" ]]; then
+                REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+                IMAGE="slack-meter-${SERVICE}"
+                docker build -t "$IMAGE" -f "$REPO_ROOT/infra/Dockerfile" "$REPO_ROOT"
+
+                LIMIT_FLAGS=()
                 if [[ -n "${BLOCK_DEVICE:-}" ]]; then
                     [[ -n "${WRITE_BPS:-}" ]]  && LIMIT_FLAGS+=(--device-write-bps  "${BLOCK_DEVICE}:${WRITE_BPS}")
                     [[ -n "${READ_BPS:-}" ]]   && LIMIT_FLAGS+=(--device-read-bps   "${BLOCK_DEVICE}:${READ_BPS}")
@@ -85,42 +83,42 @@ if [[ $# -gt 0 ]]; then
                 else
                     echo "[warning] BLOCK_DEVICE not set; I/O limits will not be applied." >&2
                 fi
+
+                declare -A INTERP=(
+                    [calibrate]="bash"
+                    [fungibility-io]="python3"
+                    [fungibility-cpu]="python3"
+                    [fungibility-mem]="python3"
+                )
+                declare -A SCRIPTS=(
+                    [calibrate]="/app/scripts/run_calibrate.sh"
+                    [fungibility-io]="/app/scripts/test_fungibility_matrix.py"
+                    [fungibility-cpu]="/app/scripts/test_fungibility_matrix_cpu.py"
+                    [fungibility-mem]="/app/scripts/test_fungibility_matrix_mem.py"
+                )
+
+                docker run --rm \
+                    --cpus 4.0 \
+                    --memory 4g \
+                    "${LIMIT_FLAGS[@]}" \
+                    -e PYTHONUNBUFFERED=1 \
+                    -e SKIP_BUILD=1 \
+                    -e RESOURCE_TYPE="${RESOURCE_TYPE:-io}" \
+                    -e IO_MODE="${IO_MODE:-rand_write}" \
+                    -e QUEUE_DEPTH="${QUEUE_DEPTH:-1}" \
+                    -v "$REPO_ROOT/results:/app/results" \
+                    -v "$REPO_ROOT/scripts:/app/scripts" \
+                    -v "$REPO_ROOT/infra/scratch:/holly/scratch" \
+                    -v "$REPO_ROOT/infra/slack-meter-calibrate:/holly/slack-meter-calibrate" \
+                    -v "$REPO_ROOT/infra/slack-meter-loaded-sweep:/holly/slack-meter-loaded-sweep" \
+                    -v "$REPO_ROOT/infra/slack-meter-saturate:/holly/slack-meter-saturate" \
+                    --entrypoint "${INTERP[$SERVICE]}" \
+                    "$IMAGE" \
+                    "${SCRIPTS[$SERVICE]}" "$@"
+                exit $?
             fi
 
-            # Entrypoints mirror what docker-compose.yml defines per service.
-            # Separated into interpreter + script so --entrypoint can override
-            # the Dockerfile's default ENTRYPOINT (run_saturation_sweep.sh).
-            declare -A INTERP=(
-                [calibrate]="bash"
-                [fungibility-io]="python3"
-                [fungibility-cpu]="python3"
-                [fungibility-mem]="python3"
-            )
-            declare -A SCRIPTS=(
-                [calibrate]="/app/scripts/run_calibrate.sh"
-                [fungibility-io]="/app/scripts/test_fungibility_matrix.py"
-                [fungibility-cpu]="/app/scripts/test_fungibility_matrix_cpu.py"
-                [fungibility-mem]="/app/scripts/test_fungibility_matrix_mem.py"
-            )
-
-            docker run --rm \
-                --cpus 4.0 \
-                --memory 4g \
-                "${LIMIT_FLAGS[@]}" \
-                -e PYTHONUNBUFFERED=1 \
-                -e SKIP_BUILD=1 \
-                -e RESOURCE_TYPE="${RESOURCE_TYPE:-io}" \
-                -e IO_MODE="${IO_MODE:-rand_write}" \
-                -e QUEUE_DEPTH="${QUEUE_DEPTH:-1}" \
-                -v "$REPO_ROOT/results:/app/results" \
-                -v "$REPO_ROOT/scripts:/app/scripts" \
-                -v "$REPO_ROOT/infra/scratch:/holly/scratch" \
-                -v "$REPO_ROOT/infra/slack-meter-calibrate:/holly/slack-meter-calibrate" \
-                -v "$REPO_ROOT/infra/slack-meter-loaded-sweep:/holly/slack-meter-loaded-sweep" \
-                -v "$REPO_ROOT/infra/slack-meter-saturate:/holly/slack-meter-saturate" \
-                --entrypoint "${INTERP[$SERVICE]}" \
-                "$IMAGE" \
-                "${SCRIPTS[$SERVICE]}" "$@"
+            docker compose -f "$COMPOSE_FILE" --profile tools run --build "$SERVICE" "$@"
             exit $?
             ;;
         rocksdb-saturate|rocksdb-slack|rocksdb-full)
