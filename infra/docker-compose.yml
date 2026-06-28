@@ -178,6 +178,7 @@ services:
     profiles:
       - tools
     entrypoint: [ "bash", "/app/scripts/run_calibrate.sh" ]
+    blkio_config: {}  # Override x-base limits — calibrate measures raw device capacity
 
   fungibility-io:
     <<: *base
